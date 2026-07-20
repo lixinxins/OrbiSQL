@@ -1,0 +1,11 @@
+node_modules/
+out/
+release/
+.DS_Store
+*.log
+*.local
+.idea/
+.vscode/
+
+# 旧品牌阶段生成、且未被应用引用的设计稿
+resources/omnidb-*.png
