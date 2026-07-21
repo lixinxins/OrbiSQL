@@ -80,6 +80,12 @@ export interface QueryExecutionResult extends ConnectionActionResult {
   rows?: Array<Record<string, unknown>>
   affectedRows?: number
   editable?: QueryEditableMetadata
+  startTime?: string
+  endTime?: string
+  durationMs?: number
+  queryCount?: number
+  errorCount?: number
+  successCount?: number
 }
 
 export interface QueryEditableColumn {

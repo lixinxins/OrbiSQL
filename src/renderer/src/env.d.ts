@@ -20,13 +20,23 @@ import type {
   UpdateDatabaseInput,
   UpdateTableInput
 } from '../../shared/connections'
+import type { AiAgentRequest, AiAgentResponse, AiExecuteProposalRequest, AiModelActionResult, AiModelPreset, AiSaveModelInput, AiStoredModel } from '../../shared/ai-agent'
 
 declare global {
   interface Window {
     omnidb: {
       getAppInfo: () => Promise<AppInfo>
       onSettingsRequested: (callback: () => void) => () => void
+      onAboutRequested: (callback: () => void) => () => void
       updatePreferences: (preferences: AppPreferences) => Promise<void>
+      ai: {
+        listModelPresets: () => Promise<AiModelPreset[]>
+        listModels: () => Promise<AiStoredModel[]>
+        saveModel: (input: AiSaveModelInput) => Promise<AiModelActionResult>
+        deleteModel: (id: number) => Promise<AiModelActionResult>
+        chat: (request: AiAgentRequest) => Promise<AiAgentResponse>
+        executeProposal: (request: AiExecuteProposalRequest) => Promise<AiAgentResponse>
+      }
       connections: {
         list: () => Promise<DatabaseConnection[]>
         selectSqliteFile: () => Promise<string | null>

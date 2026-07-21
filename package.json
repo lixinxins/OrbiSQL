@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "OrbiSQL - Cross-platform desktop database management tool",
   "main": "./out/main/index.js",
-  "author": "OrbiSQL Team",
+  "author": "CodeAce",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -17,16 +17,13 @@
     "dist:linux": "yarn build && electron-builder --linux"
   },
   "dependencies": {
-    "@phosphor-icons/react": "^2.1.10",
     "csv-parse": "^7.0.1",
     "csv-stringify": "^6.8.1",
     "mysql2": "^3.23.0",
-    "pg": "^8.22.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "sql-formatter": "^15.8.2"
+    "pg": "^8.22.0"
   },
   "devDependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@types/node": "^24.3.0",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.1.12",
@@ -35,12 +32,16 @@
     "electron": "^38.0.0",
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sql-formatter": "^15.8.2",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   },
   "build": {
     "appId": "com.orbisql.desktop",
     "productName": "OrbiSQL",
+    "copyright": "Copyright © 2026 CodeAce",
     "executableName": "OrbiSQL",
     "artifactName": "OrbiSQL-${version}-${arch}.${ext}",
     "asar": true,
@@ -60,6 +61,10 @@
     "mac": {
       "icon": "resources/icon.icns",
       "category": "public.app-category.developer-tools",
+      "electronLanguages": [
+        "zh_CN",
+        "en"
+      ],
       "extendInfo": {
         "CFBundleName": "OrbiSQL",
         "CFBundleDisplayName": "OrbiSQL"
@@ -71,6 +76,10 @@
     },
     "win": {
       "icon": "resources/icon.png",
+      "electronLanguages": [
+        "zh-CN",
+        "en-US"
+      ],
       "target": [
         "nsis",
         "portable"
@@ -79,14 +88,25 @@
     "linux": {
       "icon": "resources/icon.png",
       "category": "Development",
+      "electronLanguages": [
+        "zh-CN",
+        "en-US"
+      ],
       "target": [
         "AppImage",
         "deb"
       ]
     },
     "nsis": {
+      "artifactName": "OrbiSQL-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OrbiSQL"
+    },
+    "portable": {
+      "artifactName": "OrbiSQL-Portable-${version}-${arch}.${ext}"
     }
   },
   "packageManager": "yarn@1.22.22"

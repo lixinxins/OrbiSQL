@@ -1,10 +1,18 @@
+// Suppress Node.js experimental SQLite warning (stable in future Node.js versions)
+process.on('warning', (warning) => {
+  if (warning.name === 'ExperimentalWarning' && warning.message.includes('SQLite')) return
+  console.warn(warning)
+})
+
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import { readFile } from 'node:fs/promises'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { ConnectionRepository } from './database/connection-repository'
+import { AiAgentService } from './services/ai-agent-service'
 import { ConnectionService } from './services/connection-service'
+import type { AiAgentRequest, AiExecuteProposalRequest, AiSaveModelInput } from '../shared/ai-agent'
 import type { AppLanguage, AppPreferences, CopyTableInput, CreateConnectionInput, CreateTableInput, DatabaseDefinitionInput, QueryDeleteRowInput, QueryUpdateRowInput, RenameTableInput, SaveQueryInput, TableDataFilter, UpdateConnectionInput, UpdateDatabaseInput, UpdateTableInput } from '../shared/connections'
 
 const PRODUCT_NAME = 'OrbiSQL'
@@ -25,15 +33,8 @@ const getApplicationIconPath = (): string => app.isPackaged
   : join(__dirname, '../../resources/icon.png')
 
 const showAboutDialog = (): void => {
-  const english = applicationLanguage === 'en-US'
-  void dialog.showMessageBox({
-    type: 'info',
-    title: english ? `About ${PRODUCT_NAME}` : `关于 ${PRODUCT_NAME}`,
-    message: PRODUCT_NAME,
-    detail: english ? `Version ${app.getVersion()}\nCross-platform desktop database manager` : `版本 ${app.getVersion()}\n跨平台桌面数据库管理工具`,
-    icon: nativeImage.createFromPath(getApplicationIconPath()),
-    buttons: [english ? 'OK' : '确定']
-  })
+  const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  targetWindow?.webContents.send('app:open-about')
 }
 
 app.commandLine.appendSwitch('lang', applicationLanguage)
@@ -44,7 +45,7 @@ app.setAboutPanelOptions({
   applicationName: PRODUCT_NAME,
   applicationVersion: app.getVersion(),
   version: app.getVersion(),
-  copyright: 'Copyright © OrbiSQL Team',
+  copyright: 'Copyright © 2026 CodeAce',
   iconPath: getApplicationIconPath()
 })
 
@@ -203,6 +204,7 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.setIcon(nativeImage.createFromPath(getApplicationIconPath()))
   const connectionRepository = new ConnectionRepository(join(app.getPath('userData'), 'omnidb.sqlite'))
   const connectionService = new ConnectionService(connectionRepository)
+  const aiAgentService = new AiAgentService(connectionService, connectionRepository)
 
   createApplicationMenu()
 
@@ -220,6 +222,12 @@ app.whenReady().then(() => {
     }
     createApplicationMenu()
   })
+  ipcMain.handle('ai:list-model-presets', () => aiAgentService.listModelPresets())
+  ipcMain.handle('ai:list-models', () => aiAgentService.listModels())
+  ipcMain.handle('ai:save-model', (_event, input: AiSaveModelInput) => aiAgentService.saveModel(input))
+  ipcMain.handle('ai:delete-model', (_event, id: number) => aiAgentService.deleteModel(id))
+  ipcMain.handle('ai:chat', (_event, request: AiAgentRequest) => aiAgentService.chat(request))
+  ipcMain.handle('ai:execute-proposal', (_event, request: AiExecuteProposalRequest) => aiAgentService.executeProposal(request))
   ipcMain.handle('connections:list', () => connectionService.list())
   ipcMain.handle('connections:select-sqlite-file', async () => {
     const choice = await dialog.showMessageBox({

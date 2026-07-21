@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
   CaretLeft,
   CaretRight,
   Code,
   Database,
+  DotsThree,
   FileSql,
   Plus,
   Rows,
+  Sparkle,
   X
 } from '@phosphor-icons/react'
 import ConnectionSidebar from './components/ConnectionSidebar'
+import AboutDialog from './components/AboutDialog'
+import AiDatabaseWorkspace from './components/AiDatabaseWorkspace'
 import ConnectionDialog from './components/ConnectionDialog'
 import { useConfirmDialog } from './components/ConfirmDialog'
 import DatabaseDialog from './components/DatabaseDialog'
@@ -53,8 +57,9 @@ interface DatabaseOverviewTab {
   databaseName: string
 }
 
-type WorkspaceKind = 'database' | 'tables' | 'queries' | 'data' | null
+type WorkspaceKind = 'database' | 'tables' | 'queries' | 'data' | 'ai' | null
 type ClosableWorkspaceKind = Exclude<WorkspaceKind, null>
+const AI_DATABASE_TAB_ID = 'ai-database-workspace'
 
 interface WorkspaceTabReference {
   id: string
@@ -78,6 +83,7 @@ function App() {
   const [connectionsLoading, setConnectionsLoading] = useState(true)
   const [showConnectionDialog, setShowConnectionDialog] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [showAboutDialog, setShowAboutDialog] = useState(false)
   const [editingConnection, setEditingConnection] = useState<DatabaseConnection | null>(null)
   const [databaseDialog, setDatabaseDialog] = useState<{ connection: DatabaseConnection; database: DatabaseItem | null } | null>(null)
   const [queryTabs, setQueryTabs] = useState<QueryTab[]>([])
@@ -90,7 +96,11 @@ function App() {
   const [databaseTabs, setDatabaseTabs] = useState<DatabaseOverviewTab[]>([])
   const [activeDatabaseTabId, setActiveDatabaseTabId] = useState<string | null>(null)
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceKind>(null)
+  const [aiDatabaseOpen, setAiDatabaseOpen] = useState(false)
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenu | null>(null)
+  const [showTabOverflow, setShowTabOverflow] = useState(false)
+  const [maxVisibleWorkspaceTabs, setMaxVisibleWorkspaceTabs] = useState(1)
+  const workspaceTabbarRef = useRef<HTMLDivElement>(null)
   const [tablePicker, setTablePicker] = useState<{ connection: DatabaseConnection; database: DatabaseItem; mode: 'import' | 'export' } | null>(null)
   const [renameTableDialog, setRenameTableDialog] = useState<{ connection: DatabaseConnection; database: DatabaseItem; table: TableItem } | null>(null)
   const [renameTableName, setRenameTableName] = useState('')
@@ -117,6 +127,7 @@ function App() {
   }, [loadConnections])
 
   useEffect(() => window.omnidb.onSettingsRequested(() => setShowSettingsDialog(true)), [])
+  useEffect(() => window.omnidb.onAboutRequested(() => setShowAboutDialog(true)), [])
 
   useEffect(() => {
     if (!tabContextMenu) return
@@ -133,6 +144,42 @@ function App() {
       window.removeEventListener('keydown', closeOnEscape)
     }
   }, [tabContextMenu])
+
+  useEffect(() => {
+    const tabbar = workspaceTabbarRef.current
+    if (!tabbar) return
+    const updateCapacity = (): void => {
+      const totalTabs = databaseTabs.length + tableDialogs.length + queryTabs.length + tableDataTabs.length + (aiDatabaseOpen ? 1 : 0)
+      const tabbarWidth = tabbar.getBoundingClientRect().width
+      const workbenchWidth = 130
+      const overflowButtonWidth = 44
+      const readableTabWidth = 180
+      const capacityWithoutOverflow = Math.max(1, Math.floor((tabbarWidth - workbenchWidth) / readableTabWidth))
+      const reservedOverflowWidth = totalTabs > capacityWithoutOverflow ? overflowButtonWidth : 0
+      const nextCapacity = Math.max(1, Math.floor((tabbarWidth - workbenchWidth - reservedOverflowWidth) / readableTabWidth))
+      setMaxVisibleWorkspaceTabs(nextCapacity)
+    }
+    updateCapacity()
+    const observer = new ResizeObserver(updateCapacity)
+    observer.observe(tabbar)
+    return () => observer.disconnect()
+  }, [aiDatabaseOpen, databaseTabs.length, queryTabs.length, tableDataTabs.length, tableDialogs.length])
+
+  useEffect(() => {
+    if (!showTabOverflow) return
+    const close = (): void => setShowTabOverflow(false)
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') close()
+    }
+    window.addEventListener('click', close)
+    window.addEventListener('blur', close)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('blur', close)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [showTabOverflow])
 
   useEffect(() => {
     localStorage.setItem('omnidb.preferences.language', language)
@@ -258,7 +305,8 @@ function App() {
     ...databaseTabs.map((tab) => ({ id: tab.id, kind: 'database' as const })),
     ...tableDialogs.map((tab) => ({ id: tab.id, kind: 'tables' as const })),
     ...queryTabs.map((tab) => ({ id: tab.id, kind: 'queries' as const })),
-    ...tableDataTabs.map((tab) => ({ id: tab.id, kind: 'data' as const }))
+    ...tableDataTabs.map((tab) => ({ id: tab.id, kind: 'data' as const })),
+    ...(aiDatabaseOpen ? [{ id: AI_DATABASE_TAB_ID, kind: 'ai' as const }] : [])
   ]
 
   const activeWorkspaceTab = (): WorkspaceTabReference | null => {
@@ -266,6 +314,7 @@ function App() {
     if (activeWorkspace === 'tables' && activeTableDialogId) return { id: activeTableDialogId, kind: 'tables' }
     if (activeWorkspace === 'queries' && activeQueryId) return { id: activeQueryId, kind: 'queries' }
     if (activeWorkspace === 'data' && activeTableDataId) return { id: activeTableDataId, kind: 'data' }
+    if (activeWorkspace === 'ai' && aiDatabaseOpen) return { id: AI_DATABASE_TAB_ID, kind: 'ai' }
     return null
   }
 
@@ -278,6 +327,7 @@ function App() {
     if (tab.kind === 'tables') setActiveTableDialogId(tab.id)
     if (tab.kind === 'queries') setActiveQueryId(tab.id)
     if (tab.kind === 'data') setActiveTableDataId(tab.id)
+    if (tab.kind === 'ai') setAiDatabaseOpen(true)
     setActiveWorkspace(tab.kind)
   }
 
@@ -293,6 +343,7 @@ function App() {
     setTableDialogs((current) => current.filter((tab) => !closingIds.has(tab.id)))
     setQueryTabs((current) => current.filter((tab) => !closingIds.has(tab.id)))
     setTableDataTabs((current) => current.filter((tab) => !closingIds.has(tab.id)))
+    if (closingIds.has(AI_DATABASE_TAB_ID)) setAiDatabaseOpen(false)
     if (currentActive && closingIds.has(currentActive.id)) {
       const next = allTabs.slice(selectionIndex + 1).find((tab) => !closingIds.has(tab.id))
         ?? [...allTabs.slice(0, selectionIndex)].reverse().find((tab) => !closingIds.has(tab.id))
@@ -329,6 +380,11 @@ function App() {
   const openDefaultQuery = (): void => {
     if (activeDatabase) openQuery(activeDatabase.connection, activeDatabase.database)
     else addQueryTab({ connectionId: null, connectionName: '', databaseName: '' })
+  }
+
+  const openAiDatabase = (): void => {
+    setAiDatabaseOpen(true)
+    setActiveWorkspace('ai')
   }
 
   const closeQuery = (id: string): void => {
@@ -540,6 +596,34 @@ function App() {
 
   const contextMenuTabs = workspaceTabs()
   const contextMenuTabIndex = tabContextMenu ? contextMenuTabs.findIndex((tab) => tab.id === tabContextMenu.id) : -1
+  const activeTabReference = activeWorkspaceTab()
+  const activeTabIndex = activeTabReference ? contextMenuTabs.findIndex((tab) => tab.id === activeTabReference.id) : 0
+  const visibleTabStart = contextMenuTabs.length <= maxVisibleWorkspaceTabs
+    ? 0
+    : Math.max(0, Math.min(
+      activeTabIndex - Math.floor((maxVisibleWorkspaceTabs - 1) / 2),
+      contextMenuTabs.length - maxVisibleWorkspaceTabs
+    ))
+  const visibleWorkspaceTabs = contextMenuTabs.slice(visibleTabStart, visibleTabStart + maxVisibleWorkspaceTabs)
+  const visibleWorkspaceTabIds = new Set(visibleWorkspaceTabs.map((tab) => tab.id))
+  const hiddenWorkspaceTabs = contextMenuTabs.filter((tab) => !visibleWorkspaceTabIds.has(tab.id))
+  const workspaceTabLabel = (tab: WorkspaceTabReference): string => {
+    if (tab.kind === 'database') {
+      const item = databaseTabs.find((candidate) => candidate.id === tab.id)
+      return `数据表 · ${item?.databaseName ?? '数据库'}`
+    }
+    if (tab.kind === 'tables') {
+      const item = tableDialogs.find((candidate) => candidate.id === tab.id)
+      return item?.table ? `设计表 · ${item.table.name}` : `新建表 · ${item?.database.name ?? '数据库'}`
+    }
+    if (tab.kind === 'queries') {
+      const item = queryTabs.find((candidate) => candidate.id === tab.id)
+      return item?.context.title || `查询 · ${item?.context.databaseName || '未选择数据库'}`
+    }
+    if (tab.kind === 'ai') return 'AI数据库'
+    const item = tableDataTabs.find((candidate) => candidate.id === tab.id)
+    return `数据 · ${item?.table.name ?? '数据表'}`
+  }
 
   return (
     <div className={`app${isMacOS ? ' platform-macos' : ''}`}>
@@ -604,6 +688,7 @@ function App() {
         />
 
         <main className="content-area table-designer-workspace query-workspace-shell">
+            <div ref={workspaceTabbarRef} className="workspace-tabbar">
             <div className="content-tabs table-designer-window-tabs query-window-tabs" role="tablist">
               <div
                 className={`home-tab workbench-tab${activeWorkspace === null ? ' active' : ''}`}
@@ -617,7 +702,7 @@ function App() {
               >
                 <Database weight="fill" /><span>工作台</span>
               </div>
-              {databaseTabs.map((tab) => (
+              {databaseTabs.filter((tab) => visibleWorkspaceTabIds.has(tab.id)).map((tab) => (
                 <div
                   className={`home-tab query-tab database-overview-tab${activeWorkspace === 'database' && activeDatabaseTabId === tab.id ? ' active' : ''}`}
                   key={tab.id}
@@ -638,7 +723,7 @@ function App() {
                   <button type="button" onClick={(event) => { event.stopPropagation(); closeDatabaseOverview(tab.id) }} aria-label={`关闭 ${tab.databaseName} 数据表页面`}><X /></button>
                 </div>
               ))}
-              {tableDialogs.map((tab) => (
+              {tableDialogs.filter((tab) => visibleWorkspaceTabIds.has(tab.id)).map((tab) => (
                 <div
                   className={`home-tab query-tab table-designer-tab${activeWorkspace === 'tables' && activeTableDialogId === tab.id ? ' active' : ''}`}
                   key={tab.id}
@@ -659,7 +744,7 @@ function App() {
                   <button type="button" onClick={(event) => { event.stopPropagation(); closeTableDesigner(tab.id) }} aria-label={`关闭 ${tab.database.name} 新建表页面`}><X /></button>
                 </div>
               ))}
-              {queryTabs.map((tab) => (
+              {queryTabs.filter((tab) => visibleWorkspaceTabIds.has(tab.id)).map((tab) => (
                 <div
                   className={`home-tab query-tab query-document-tab${activeWorkspace === 'queries' && activeQueryId === tab.id ? ' active' : ''}`}
                   key={tab.id}
@@ -680,7 +765,7 @@ function App() {
                   <button type="button" onClick={(event) => { event.stopPropagation(); closeQuery(tab.id) }} aria-label="关闭查询页面"><X /></button>
                 </div>
               ))}
-              {tableDataTabs.map((tab) => (
+              {tableDataTabs.filter((tab) => visibleWorkspaceTabIds.has(tab.id)).map((tab) => (
                 <div
                   className={`home-tab query-tab table-data-tab${activeWorkspace === 'data' && activeTableDataId === tab.id ? ' active' : ''}`}
                   key={tab.id}
@@ -701,6 +786,51 @@ function App() {
                   <button type="button" onClick={(event) => { event.stopPropagation(); closeTableData(tab.id) }} aria-label={`关闭 ${tab.table.name} 数据页面`}><X /></button>
                 </div>
               ))}
+              {aiDatabaseOpen && visibleWorkspaceTabIds.has(AI_DATABASE_TAB_ID) && (
+                <div
+                  className={`home-tab query-tab ai-database-tab${activeWorkspace === 'ai' ? ' active' : ''}`}
+                  role="tab"
+                  tabIndex={0}
+                  title="AI数据库"
+                  onContextMenu={(event) => openTabContextMenu(event, { id: AI_DATABASE_TAB_ID, kind: 'ai' })}
+                  onClick={() => setActiveWorkspace('ai')}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') setActiveWorkspace('ai')
+                  }}
+                >
+                  <Sparkle weight="fill" />
+                  <span>AI数据库</span>
+                  <button type="button" onClick={(event) => { event.stopPropagation(); closeWorkspaceTabSet([{ id: AI_DATABASE_TAB_ID, kind: 'ai' }], { id: AI_DATABASE_TAB_ID, kind: 'ai' }) }} aria-label="关闭 AI数据库"><X /></button>
+                </div>
+              )}
+            </div>
+            <div className={`workspace-tab-overflow-host${hiddenWorkspaceTabs.length ? '' : ' empty'}`}>
+              {hiddenWorkspaceTabs.length > 0 && <>
+                <button
+                  type="button"
+                  className={`workspace-tab-more${showTabOverflow ? ' active' : ''}`}
+                  title={`${hiddenWorkspaceTabs.length} 个其他页面`}
+                  aria-label="显示其他页面"
+                  aria-expanded={showTabOverflow}
+                  onClick={(event) => { event.stopPropagation(); setShowTabOverflow((current) => !current) }}
+                >
+                  <DotsThree weight="bold" />
+                  <span>{hiddenWorkspaceTabs.length}</span>
+                </button>
+                {showTabOverflow && <div className="workspace-tab-overflow-menu" onClick={(event) => event.stopPropagation()}>
+                  <header><strong>其他页面</strong><span>{hiddenWorkspaceTabs.length}</span></header>
+                  <div>
+                    {hiddenWorkspaceTabs.map((tab) => <div className="workspace-tab-overflow-item" key={tab.id} onContextMenu={(event) => openTabContextMenu(event, tab)}>
+                      <button type="button" className="workspace-tab-overflow-open" title={workspaceTabLabel(tab)} onClick={() => { activateWorkspaceTab(tab); setShowTabOverflow(false) }}>
+                        {tab.kind === 'queries' ? <Code /> : tab.kind === 'data' ? <Rows /> : <Database weight="fill" />}
+                        <span>{workspaceTabLabel(tab)}</span>
+                      </button>
+                      <button type="button" className="workspace-tab-overflow-close" title="关闭页面" aria-label={`关闭 ${workspaceTabLabel(tab)}`} onClick={() => closeWorkspaceTabSet([tab], tab)}><X /></button>
+                    </div>)}
+                  </div>
+                </div>}
+              </>}
+            </div>
             </div>
             {activeWorkspace === null && <>
               <section className="welcome">
@@ -716,6 +846,11 @@ function App() {
                   <button className="quick-card" onClick={openDefaultQuery}>
                     <span className="quick-icon violet"><FileSql /></span>
                     <span><strong>新建 SQL 查询</strong><small>打开查询编辑器并执行 SQL</small></span>
+                    <CaretRight />
+                  </button>
+                  <button type="button" className="quick-card" title="AI数据库" onClick={openAiDatabase}>
+                    <span className="quick-icon cyan"><Sparkle weight="fill" /></span>
+                    <span><strong>AI数据库</strong><small>使用 AI 辅助分析和管理数据库</small></span>
                     <CaretRight />
                   </button>
                 </div>
@@ -768,6 +903,7 @@ function App() {
                 onDesignTable={designTable}
               />
             ))}
+            {aiDatabaseOpen && <AiDatabaseWorkspace active={activeWorkspace === 'ai'} connections={connections} />}
           </main>
       </div>
       {tabContextMenu && (
@@ -840,6 +976,7 @@ function App() {
           onClose={() => setShowSettingsDialog(false)}
         />
       )}
+      {showAboutDialog && <AboutDialog onClose={() => setShowAboutDialog(false)} />}
     </div>
   )
 }

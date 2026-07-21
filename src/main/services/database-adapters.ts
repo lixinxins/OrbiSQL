@@ -232,9 +232,13 @@ export const executePostgreSqlQuery = async (
   sql: string
 ): Promise<QueryExecutionResult> => {
   const client = postgresClient(connection, databaseName)
+  const startTime = new Date().toISOString()
+  const startMs = performance.now()
   await client.connect()
   try {
     const result = await client.query(sql)
+    const endTime = new Date().toISOString()
+    const durationMs = Math.round(performance.now() - startMs)
     if (result.fields.length) {
       const rows = result.rows.map((row) => ({ ...row }))
       const tableIds = Array.from(new Set(result.fields.map((field) => field.tableID).filter(Boolean)))
@@ -262,9 +266,13 @@ export const executePostgreSqlQuery = async (
           }
         }
       }
-      return { success: true, message: `查询成功，共 ${rows.length} 行`, columns: result.fields.map((field) => field.name), rows, editable }
+      return { success: true, message: `查询成功，共 ${rows.length} 行`, columns: result.fields.map((field) => field.name), rows, editable, startTime, endTime, durationMs, queryCount: 1, successCount: 1, errorCount: 0 }
     }
-    return { success: true, message: `执行成功，影响 ${result.rowCount ?? 0} 行`, affectedRows: result.rowCount ?? 0 }
+    return { success: true, message: `执行成功，影响 ${result.rowCount ?? 0} 行`, affectedRows: result.rowCount ?? 0, startTime, endTime, durationMs, queryCount: 1, successCount: 1, errorCount: 0 }
+  } catch (error) {
+    const endTime = new Date().toISOString()
+    const durationMs = Math.round(performance.now() - startMs)
+    return { success: false, message: error instanceof Error ? error.message : '查询执行失败', startTime, endTime, durationMs, queryCount: 1, successCount: 0, errorCount: 1 }
   } finally {
     await client.end()
   }
@@ -523,10 +531,14 @@ export const exportSqliteTables = (
 
 export const executeSqliteQuery = (connection: AdapterConnection, sql: string): QueryExecutionResult => {
   const database = new DatabaseSync(connection.host)
+  const startTime = new Date().toISOString()
+  const startMs = performance.now()
   try {
     database.exec('PRAGMA foreign_keys = ON')
     const statement = database.prepare(sql)
     const columns = statement.columns().map((column) => column.name)
+    const endTime = new Date().toISOString()
+    const durationMs = Math.round(performance.now() - startMs)
     if (columns.length) {
       const rows = statement.all().map((row) => ({ ...(row as Record<string, unknown>) }))
       let editable: QueryExecutionResult['editable']
@@ -543,10 +555,14 @@ export const executeSqliteQuery = (connection: AdapterConnection, sql: string): 
           }
         }
       }
-      return { success: true, message: `查询成功，共 ${rows.length} 行`, columns, rows, editable }
+      return { success: true, message: `查询成功，共 ${rows.length} 行`, columns, rows, editable, startTime, endTime, durationMs, queryCount: 1, successCount: 1, errorCount: 0 }
     }
     const result = statement.run()
-    return { success: true, message: `执行成功，影响 ${result.changes} 行`, affectedRows: Number(result.changes) }
+    return { success: true, message: `执行成功，影响 ${result.changes} 行`, affectedRows: Number(result.changes), startTime, endTime, durationMs, queryCount: 1, successCount: 1, errorCount: 0 }
+  } catch (error) {
+    const endTime = new Date().toISOString()
+    const durationMs = Math.round(performance.now() - startMs)
+    return { success: false, message: error instanceof Error ? error.message : '查询执行失败', startTime, endTime, durationMs, queryCount: 1, successCount: 0, errorCount: 1 }
   } finally {
     database.close()
   }
