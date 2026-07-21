@@ -2,6 +2,7 @@
   "name": "orbisql",
   "version": "0.1.0",
   "description": "OrbiSQL - Cross-platform desktop database management tool",
+  "desktopName": "OrbiSQL",
   "main": "./out/main/index.js",
   "author": "CodeAce",
   "license": "MIT",
@@ -88,6 +89,8 @@
     "linux": {
       "icon": "resources/icon.png",
       "category": "Development",
+      "maintainer": "CodeAce",
+      "syncDesktopName": true,
       "electronLanguages": [
         "zh-CN",
         "en-US"
