@@ -20,6 +20,7 @@ import type {
   UpdateDatabaseInput,
   UpdateTableInput
 } from '../shared/connections'
+import type { AiAgentRequest, AiAgentResponse, AiExecuteProposalRequest, AiModelActionResult, AiModelPreset, AiSaveModelInput, AiStoredModel } from '../shared/ai-agent'
 
 export interface AppInfo {
   name: string
@@ -34,7 +35,20 @@ contextBridge.exposeInMainWorld('omnidb', {
     ipcRenderer.on('app:open-settings', listener)
     return () => ipcRenderer.removeListener('app:open-settings', listener)
   },
+  onAboutRequested: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('app:open-about', listener)
+    return () => ipcRenderer.removeListener('app:open-about', listener)
+  },
   updatePreferences: (preferences: AppPreferences): Promise<void> => ipcRenderer.invoke('app:update-preferences', preferences),
+  ai: {
+    listModelPresets: (): Promise<AiModelPreset[]> => ipcRenderer.invoke('ai:list-model-presets'),
+    listModels: (): Promise<AiStoredModel[]> => ipcRenderer.invoke('ai:list-models'),
+    saveModel: (input: AiSaveModelInput): Promise<AiModelActionResult> => ipcRenderer.invoke('ai:save-model', input),
+    deleteModel: (id: number): Promise<AiModelActionResult> => ipcRenderer.invoke('ai:delete-model', id),
+    chat: (request: AiAgentRequest): Promise<AiAgentResponse> => ipcRenderer.invoke('ai:chat', request),
+    executeProposal: (request: AiExecuteProposalRequest): Promise<AiAgentResponse> => ipcRenderer.invoke('ai:execute-proposal', request)
+  },
   connections: {
     list: (): Promise<DatabaseConnection[]> => ipcRenderer.invoke('connections:list'),
     selectSqliteFile: (): Promise<string | null> => ipcRenderer.invoke('connections:select-sqlite-file'),

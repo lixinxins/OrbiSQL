@@ -1,5 +1,6 @@
 import { safeStorage } from 'electron'
 import { DatabaseSync } from 'node:sqlite'
+import type { AiProviderType, AiSaveModelInput, AiStoredModel } from '../../shared/ai-agent'
 import type { CreateConnectionInput, SaveQueryInput, SavedQuery, UpdateConnectionInput } from '../../shared/connections'
 
 export interface StoredConnection {
@@ -36,6 +37,21 @@ interface SavedQueryRow {
   sql_text: string
   created_at: string
   updated_at: string
+}
+
+interface AiModelRow {
+  id: number
+  name: string
+  provider: AiProviderType
+  endpoint: string
+  model_name: string
+  api_key_cipher: Uint8Array | null
+  created_at: string
+  updated_at: string
+}
+
+export interface StoredAiModel extends AiStoredModel {
+  apiKey: string
 }
 
 export class ConnectionRepository {
@@ -113,7 +129,25 @@ export class ConnectionRepository {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS saved_queries_unique_name
         ON saved_queries(connection_id, database_name, name);
+
+      CREATE TABLE IF NOT EXISTS ai_models (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        provider TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        model_name TEXT NOT NULL,
+        api_key_cipher BLOB,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `)
+    const modelCount = this.database.prepare('SELECT COUNT(*) AS count FROM ai_models').get() as { count: number }
+    if (Number(modelCount.count) === 0) {
+      const insert = this.database.prepare('INSERT INTO ai_models (name, provider, endpoint, model_name) VALUES (?, ?, ?, ?)')
+      insert.run('OpenAI', 'openai-responses', 'https://api.openai.com/v1', 'gpt-5.6-sol')
+      insert.run('OpenAI 兼容接口', 'openai-compatible', 'https://api.openai.com/v1', 'gpt-5.6-sol')
+      insert.run('Ollama 本地模型', 'ollama', 'http://localhost:11434', 'qwen3')
+    }
   }
 
   list(): StoredConnection[] {
@@ -289,6 +323,53 @@ export class ConnectionRepository {
       WHERE id = ? AND connection_id = ? AND database_name = ?
     `).run(id, connectionId, databaseName)
     return Number(result.changes) > 0
+  }
+
+  listAiModels(): StoredAiModel[] {
+    const rows = this.database.prepare(`
+      SELECT id, name, provider, endpoint, model_name, api_key_cipher, created_at, updated_at
+      FROM ai_models ORDER BY updated_at DESC, id ASC
+    `).all() as unknown as AiModelRow[]
+    return rows.map((row) => ({
+      id: Number(row.id),
+      name: row.name,
+      provider: row.provider,
+      endpoint: row.endpoint,
+      model: row.model_name,
+      apiKey: this.decryptPassword(row.api_key_cipher),
+      hasApiKey: Boolean(row.api_key_cipher),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }))
+  }
+
+  getAiModel(id: number): StoredAiModel | null {
+    return this.listAiModels().find((model) => model.id === id) ?? null
+  }
+
+  saveAiModel(input: AiSaveModelInput): StoredAiModel {
+    const current = input.id ? this.getAiModel(input.id) : null
+    const existingCipher = current?.hasApiKey
+      ? (this.database.prepare('SELECT api_key_cipher FROM ai_models WHERE id = ?').get(input.id!) as unknown as { api_key_cipher: Uint8Array | null }).api_key_cipher
+      : null
+    const apiKeyCipher = input.apiKey?.trim() ? this.encryptPassword(input.apiKey.trim()) : existingCipher
+    if (input.id) {
+      this.database.prepare(`
+        UPDATE ai_models SET name = ?, provider = ?, endpoint = ?, model_name = ?, api_key_cipher = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(input.name.trim(), input.provider, input.endpoint.trim(), input.model.trim(), apiKeyCipher, input.id)
+      const saved = this.getAiModel(input.id)
+      if (!saved) throw new Error('模型配置不存在')
+      return saved
+    }
+    const result = this.database.prepare(`
+      INSERT INTO ai_models (name, provider, endpoint, model_name, api_key_cipher) VALUES (?, ?, ?, ?, ?)
+    `).run(input.name.trim(), input.provider, input.endpoint.trim(), input.model.trim(), apiKeyCipher)
+    return this.getAiModel(Number(result.lastInsertRowid))!
+  }
+
+  deleteAiModel(id: number): boolean {
+    return Number(this.database.prepare('DELETE FROM ai_models WHERE id = ?').run(id).changes) > 0
   }
 
   private encryptPassword(password: string): Buffer {

@@ -333,6 +333,16 @@ export class ConnectionService {
     }
 
     let client: Awaited<ReturnType<typeof createConnection>> | null = null
+    const startTime = new Date().toISOString()
+    const startMs = performance.now()
+    const executionStats = (success: boolean): Pick<QueryExecutionResult, 'startTime' | 'endTime' | 'durationMs' | 'queryCount' | 'successCount' | 'errorCount'> => ({
+      startTime,
+      endTime: new Date().toISOString(),
+      durationMs: Math.round(performance.now() - startMs),
+      queryCount: 1,
+      successCount: success ? 1 : 0,
+      errorCount: success ? 0 : 1
+    })
     try {
       client = await createConnection({
         host: connection.host,
@@ -355,13 +365,14 @@ export class ConnectionService {
           message: `查询成功，共 ${rows.length} 行`,
           columns: fields.map((field) => field.name),
           rows,
-          editable
+          editable,
+          ...executionStats(true)
         }
       }
       const affectedRows = 'affectedRows' in result ? Number(result.affectedRows) : 0
-      return { success: true, message: `执行成功，影响 ${affectedRows} 行`, affectedRows }
+      return { success: true, message: `执行成功，影响 ${affectedRows} 行`, affectedRows, ...executionStats(true) }
     } catch (error) {
-      return { success: false, message: this.errorMessage(error) }
+      return { success: false, message: this.errorMessage(error), ...executionStats(false) }
     } finally {
       if (client) await client.end()
     }

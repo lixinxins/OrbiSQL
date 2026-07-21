@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
-import { ArrowsInLineHorizontal, BookmarksSimple, CaretDown, CaretRight, Check, Code, Copy, FloppyDisk, PencilSimple, Play, TextAlignLeft, Trash, WarningCircle, X } from '@phosphor-icons/react'
+import { ArrowsInLineHorizontal, BookmarksSimple, CaretDown, CaretRight, CaretUp, Check, Code, Copy, FloppyDisk, Play, TextAlignLeft, Trash, WarningCircle, X } from '@phosphor-icons/react'
 import { format as formatSqlText } from 'sql-formatter'
 import type { DatabaseConnection, DatabaseItem, QueryExecutionResult, SavedQuery } from '../../../shared/connections'
 import { useConfirmDialog } from './ConfirmDialog'
@@ -207,8 +207,8 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [suggestionIndex, setSuggestionIndex] = useState(0)
   const [suggestionPosition, setSuggestionPosition] = useState({ left: 20, top: 18 })
-  const [editingRow, setEditingRow] = useState<number | null>(null)
-  const [draftRow, setDraftRow] = useState<Record<string, unknown>>({})
+  const [editingCell, setEditingCell] = useState<{ rowIndex: number; column: string } | null>(null)
+  const [draftCellValue, setDraftCellValue] = useState<unknown>('')
   const [savingRow, setSavingRow] = useState(false)
   const [rowSaveError, setRowSaveError] = useState('')
   const [formatError, setFormatError] = useState('')
@@ -220,6 +220,16 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
   const [saveQueryError, setSaveQueryError] = useState('')
   const [saveQueryNotice, setSaveQueryNotice] = useState('')
   const [resultContextMenu, setResultContextMenu] = useState<{ x: number; y: number; rowIndex: number; column: string } | null>(null)
+  const [editorHeightPercent, setEditorHeightPercent] = useState(38)
+  const dragState = useRef<{ startY: number; startHeight: number } | null>(null)
+  const workspaceRef = useRef<HTMLElement>(null)
+  const [errorCopied, setErrorCopied] = useState(false)
+  const [resultPanelTab, setResultPanelTab] = useState<'message' | 'summary' | 'result'>('message')
+  const [resultDataTab, setResultDataTab] = useState<'data' | 'info'>('data')
+  const [resultPanelVisible, setResultPanelVisible] = useState(false)
+  const [resultPanelCollapsed, setResultPanelCollapsed] = useState(false)
+  const [onlyErrors, setOnlyErrors] = useState(false)
+  const [cursorPosition, setCursorPosition] = useState({ line: 1, column: 1 })
 
   useEffect(() => {
     if (!resultContextMenu) return
@@ -301,6 +311,13 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
     setSql(event.target.value)
     setFormatError('')
     updateSuggestions(event.target.value, event.target.selectionStart, event.target)
+    updateCursorPosition(event.target)
+  }
+
+  const updateCursorPosition = (target: HTMLTextAreaElement): void => {
+    const beforeCursor = target.value.slice(0, target.selectionStart)
+    const lines = beforeCursor.split('\n')
+    setCursorPosition({ line: lines.length, column: lines[lines.length - 1].length + 1 })
   }
 
   const applySuggestion = (suggestion: string): void => {
@@ -452,17 +469,52 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
     }
   }
 
+  // 拖拽调整编辑器与结果面板的高度
+  const handleResizeMouseDown = (event: React.MouseEvent): void => {
+    event.preventDefault()
+    dragState.current = { startY: event.clientY, startHeight: editorHeightPercent }
+    document.addEventListener('mousemove', handleResizeMouseMove)
+    document.addEventListener('mouseup', handleResizeMouseUp)
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  const handleResizeMouseMove = (event: MouseEvent): void => {
+    if (!dragState.current || !workspaceRef.current) return
+    const deltaY = event.clientY - dragState.current.startY
+    const workspaceHeight = workspaceRef.current.getBoundingClientRect().height
+    const percentDelta = (deltaY / workspaceHeight) * 100
+    const newPercent = Math.max(15, Math.min(85, dragState.current.startHeight + percentDelta))
+    setEditorHeightPercent(newPercent)
+  }
+
+  const handleResizeMouseUp = (): void => {
+    dragState.current = null
+    document.removeEventListener('mousemove', handleResizeMouseMove)
+    document.removeEventListener('mouseup', handleResizeMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
   const execute = async (): Promise<void> => {
     if (!connectionId || !databaseName) {
       setResult({ success: false, message: '请先选择数据库' })
+      setResultPanelVisible(true)
+      setResultPanelTab('message')
+      setResultPanelCollapsed(false)
       return
     }
     setRunning(true)
-    setEditingRow(null)
+    setEditingCell(null)
     setRowSaveError('')
     setSuggestions([])
     try {
-      setResult(await window.omnidb.queries.execute(connectionId, databaseName, sql))
+      const nextResult = await window.omnidb.queries.execute(connectionId, databaseName, sql)
+      setResult(nextResult)
+      setResultPanelVisible(true)
+      setResultPanelTab(nextResult.success && nextResult.columns && nextResult.rows ? 'result' : 'message')
+      setResultDataTab('data')
+      setResultPanelCollapsed(false)
     } finally {
       setRunning(false)
     }
@@ -474,24 +526,25 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
     void execute()
   }, [])
 
-  const startEditingRow = (rowIndex: number): void => {
-    if (!result?.rows?.[rowIndex] || !result.editable) return
-    setEditingRow(rowIndex)
-    setDraftRow({ ...result.rows[rowIndex] })
+  const startEditingCell = (rowIndex: number, column: string): void => {
+    if (!result?.rows?.[rowIndex] || !result.editable?.columns.some((item) => item.resultName === column) || savingRow) return
+    setEditingCell({ rowIndex, column })
+    setDraftCellValue(result.rows[rowIndex][column])
     setRowSaveError('')
   }
 
-  const saveEditingRow = async (): Promise<void> => {
-    if (editingRow === null || !result?.rows?.[editingRow] || !result.editable || !connectionId) return
-    const originalRow = result.rows[editingRow]
+  const saveEditingCell = async (): Promise<void> => {
+    if (!editingCell || !result?.rows?.[editingCell.rowIndex] || !result.editable || !connectionId) return
+    const activeCell = editingCell
+    const originalRow = result.rows[activeCell.rowIndex]
+    const editableColumn = result.editable.columns.find((column) => column.resultName === activeCell.column)
+    if (!editableColumn) return
     const primaryKeyValues: Record<string, unknown> = {}
-    const changes: Record<string, unknown> = {}
     result.editable.columns.forEach((column) => {
       if (column.primaryKey) primaryKeyValues[column.sourceName] = originalRow[column.resultName]
-      if (draftRow[column.resultName] !== originalRow[column.resultName]) changes[column.sourceName] = draftRow[column.resultName]
     })
-    if (!Object.keys(changes).length) {
-      setEditingRow(null)
+    if (draftCellValue === originalRow[activeCell.column]) {
+      setEditingCell(null)
       return
     }
     setSavingRow(true)
@@ -501,20 +554,21 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
         databaseName,
         tableName: result.editable.tableName,
         primaryKeyValues,
-        changes
+        changes: { [editableColumn.sourceName]: draftCellValue }
       })
       if (!saved.success) {
         setRowSaveError(saved.message)
+        setResultPanelTab('message')
         return
       }
       setResult((current) => current?.rows ? {
         ...current,
         success: true,
         message: saved.message,
-        rows: current.rows.map((row, index) => index === editingRow ? { ...row, ...draftRow } : row)
+        rows: current.rows.map((row, index) => index === activeCell.rowIndex ? { ...row, [activeCell.column]: draftCellValue } : row)
       } : current)
       setRowSaveError('')
-      setEditingRow(null)
+      setEditingCell(null)
     } finally {
       setSavingRow(false)
     }
@@ -541,6 +595,31 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
       setResultContextMenu(null)
     }
   }
+
+  const copyErrorMessage = async (): Promise<void> => {
+    const text = rowSaveError || result?.message || ''
+    try {
+      await navigator.clipboard.writeText(text)
+      setErrorCopied(true)
+      setTimeout(() => setErrorCopied(false), 2000)
+    } catch {
+      return
+    }
+  }
+
+  const formatDateTime = (iso?: string): string => {
+    if (!iso) return '--'
+    try {
+      return new Date(iso).toLocaleString('zh-CN', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+      }).replaceAll('/', '-')
+    } catch {
+      return '--'
+    }
+  }
+
+  const formatDurationSeconds = (ms?: number): string => `${((ms ?? 0) / 1000).toFixed(6)}s`
 
   const buildInsertSql = (rowIndex: number): string => {
     if (!result?.editable || !result.rows?.[rowIndex]) return ''
@@ -580,6 +659,7 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
     })
     if (!deleted.success) {
       setRowSaveError(deleted.message)
+      setResultPanelTab('message')
       return
     }
     setResult((current) => current?.rows ? {
@@ -588,7 +668,7 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
       message: deleted.message,
       rows: current.rows.filter((_, index) => index !== rowIndex)
     } : current)
-    setEditingRow(null)
+    setEditingCell(null)
     setRowSaveError('')
   }
 
@@ -600,7 +680,7 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
   }
 
   return (
-    <section className={`query-workspace${active ? ' active' : ''}`}>
+    <section className={`query-workspace${active ? ' active' : ''}`} ref={workspaceRef}>
       <div className="query-toolbar">
         <button type="button" className="run-query" onClick={() => void execute()} disabled={running || !sql.trim()}><Play weight="fill" />{running ? '运行中…' : '运行'}</button>
         <button type="button" className="format-query" onClick={formatSql} disabled={!sql.trim()} title="格式化 SQL（Shift + Alt + F）"><TextAlignLeft />格式化 SQL</button>
@@ -619,6 +699,7 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
                     <button type="button" className="saved-query-load" title={savedQuery.sql} onClick={() => {
                       setSql(savedQuery.sql)
                       setResult(null)
+                      setResultPanelVisible(false)
                       setFormatError('')
                       setSuggestions([])
                       setSaveQueryNotice(`已载入：${savedQuery.name}`)
@@ -648,6 +729,7 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
               const [nextConnectionId, nextDatabaseName = ''] = value.split('\u0000')
               onDatabaseChange(nextConnectionId ? Number(nextConnectionId) : null, nextDatabaseName)
               setResult(null)
+              setResultPanelVisible(false)
               setSuggestions([])
               setSaveQueryNotice('')
             }}
@@ -658,7 +740,10 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
         {formatError || validation.messages.length ? <WarningCircle /> : <Check />}
         <span>{formatError || (validation.messages.length ? validation.messages.join('；') : sql.trim() ? '字段检查通过' : '输入 SQL 后自动检查表和字段')}</span>
       </div>
-      <div className="sql-editor-shell">
+      <div
+        className={`sql-editor-shell${!resultPanelVisible || resultPanelCollapsed ? ' full-height' : ''}`}
+        style={resultPanelVisible && !resultPanelCollapsed ? { height: `${editorHeightPercent}%` } : undefined}
+      >
         <pre className="sql-highlight" ref={highlightRef} aria-hidden="true">
           {validation.tokens.map((token) => {
             const upper = identifierValue(token).toUpperCase()
@@ -678,7 +763,12 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
           value={sql}
           onChange={changeSql}
           onKeyDown={handleEditorKeyDown}
-          onClick={(event) => updateSuggestions(sql, event.currentTarget.selectionStart, event.currentTarget)}
+          onKeyUp={(event) => updateCursorPosition(event.currentTarget)}
+          onSelect={(event) => updateCursorPosition(event.currentTarget)}
+          onClick={(event) => {
+            updateSuggestions(sql, event.currentTarget.selectionStart, event.currentTarget)
+            updateCursorPosition(event.currentTarget)
+          }}
           onScroll={(event) => {
             if (!highlightRef.current) return
             highlightRef.current.scrollTop = event.currentTarget.scrollTop
@@ -704,46 +794,131 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
           </div>
         )}
       </div>
-      <section className="query-results">
-        <div className={`query-message${rowSaveError ? ' error' : result?.success ? ' success' : result ? ' error' : ''}`}>
-          <span>{rowSaveError || result?.message || '等待执行查询'}</span>
-          {result?.editable && <span className="query-editable-badge">可编辑 · {result.editable.tableName}</span>}
-        </div>
-        {result?.success && result.columns && result.rows && (
-          <div className="query-table-wrap">
-            <table className="query-table">
-              <thead><tr>{result.editable && <th className="query-row-actions">操作</th>}{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
-              <tbody>{result.rows.map((row, index) => <tr key={index} className={editingRow === index ? 'editing' : ''}>
-                {result.editable && <td className="query-row-actions" onContextMenu={(event) => {
-                  event.preventDefault()
-                  setResultContextMenu({ x: Math.min(event.clientX, window.innerWidth - 196), y: Math.min(event.clientY, window.innerHeight - 190), rowIndex: index, column: '' })
-                }}>
-                  {editingRow === index ? <span>
-                    <button type="button" title="保存修改" disabled={savingRow} onClick={() => void saveEditingRow()}><FloppyDisk /></button>
-                    <button type="button" title="取消修改" disabled={savingRow} onClick={() => setEditingRow(null)}><X /></button>
-                  </span> : <button type="button" title="编辑此行" disabled={editingRow !== null} onClick={() => startEditingRow(index)}><PencilSimple /></button>}
-                </td>}
-                {result.columns!.map((column) => {
-                  const editableColumn = result.editable?.columns.find((item) => item.resultName === column)
-                  return <td
-                    key={column}
-                    className={editableColumn ? 'editable-cell' : ''}
-                    onDoubleClick={() => editableColumn && startEditingRow(index)}
-                    onContextMenu={(event) => {
-                      event.preventDefault()
-                      setResultContextMenu({ x: Math.min(event.clientX, window.innerWidth - 196), y: Math.min(event.clientY, window.innerHeight - 190), rowIndex: index, column })
-                    }}
-                  >
-                    {editingRow === index && editableColumn
-                      ? <input value={draftRow[column] === null || draftRow[column] === undefined ? '' : String(draftRow[column])} onChange={(event) => setDraftRow((current) => ({ ...current, [column]: event.target.value }))} />
-                      : displayValue(row[column])}
-                  </td>
-                })}
-              </tr>)}</tbody>
-            </table>
+      {resultPanelVisible && !resultPanelCollapsed && <div className="query-resize-handle" onMouseDown={handleResizeMouseDown}>
+        <div className="query-resize-grip" />
+      </div>}
+      {resultPanelVisible && <section className={`query-results${resultPanelCollapsed ? ' collapsed' : ''}`}>
+        <header className="query-result-tabs">
+          <div className="query-result-tab-list" role="tablist">
+            <button type="button" className={resultPanelTab === 'message' ? 'active' : ''} onClick={() => setResultPanelTab('message')}>消息</button>
+            <button type="button" className={resultPanelTab === 'summary' ? 'active' : ''} onClick={() => setResultPanelTab('summary')}>摘要</button>
+            {result?.success && result.columns && result.rows && (
+              <button type="button" className={resultPanelTab === 'result' ? 'active' : ''} onClick={() => setResultPanelTab('result')}>结果 1</button>
+            )}
           </div>
-        )}
-      </section>
+          <div className="query-result-panel-actions">
+            <button type="button" title={resultPanelCollapsed ? '展开结果区域' : '收起结果区域'} onClick={() => setResultPanelCollapsed((current) => !current)}>
+              {resultPanelCollapsed ? <CaretDown /> : <CaretUp />}
+            </button>
+            <button type="button" title="关闭结果页" onClick={() => { setResultPanelVisible(false); setResultContextMenu(null) }}><X /></button>
+          </div>
+        </header>
+
+        {!resultPanelCollapsed && <div className="query-result-body">
+          {resultPanelTab === 'message' && (
+            <div className="query-result-message-view">
+              {result ? <>
+                <code>{sql.trim()}</code>
+                <p className={rowSaveError || !result.success ? 'error' : 'success'}>&gt; {rowSaveError || result.message}</p>
+                <p>&gt; 查询时间：{formatDurationSeconds(result.durationMs)}</p>
+                {(rowSaveError || !result.success) && (
+                  <button type="button" className="query-error-copy-btn" onClick={copyErrorMessage}><Copy />{errorCopied ? '已复制' : '复制错误信息'}</button>
+                )}
+              </> : <p className="empty">等待执行查询</p>}
+            </div>
+          )}
+
+          {resultPanelTab === 'summary' && (
+            <div className="query-result-summary-view">
+              <div className="query-result-summary-metrics">
+                <dl><dt>已处理的查询</dt><dd>{result?.queryCount ?? 0}</dd></dl>
+                <dl><dt>开始时间</dt><dd>{formatDateTime(result?.startTime)}</dd></dl>
+                <dl><dt>成功</dt><dd>{result?.successCount ?? (result?.success ? 1 : 0)}</dd></dl>
+                <dl><dt>结束时间</dt><dd>{formatDateTime(result?.endTime)}</dd></dl>
+                <dl><dt>错误</dt><dd>{result?.errorCount ?? (result && !result.success ? 1 : 0)}</dd></dl>
+                <dl><dt>运行时间</dt><dd>{formatDurationSeconds(result?.durationMs)}</dd></dl>
+              </div>
+              <label className="query-result-only-errors">
+                <input type="checkbox" checked={onlyErrors} onChange={(event) => setOnlyErrors(event.target.checked)} />
+                <span>仅显示错误</span>
+              </label>
+              <div className="query-result-summary-table-wrap">
+                <table className="query-result-summary-table">
+                  <thead><tr><th>查询</th><th>消息</th><th>查询时间</th><th>获取时间</th></tr></thead>
+                  <tbody>
+                    {result && (!onlyErrors || !result.success) ? <tr className={result.success ? '' : 'error'}>
+                      <td title={sql}>{sql.trim()}</td>
+                      <td title={rowSaveError || result.message}>{rowSaveError || result.message}</td>
+                      <td>{formatDurationSeconds(result.durationMs)}</td>
+                      <td>0.000000s</td>
+                    </tr> : <tr><td className="empty" colSpan={4}>{onlyErrors ? '没有错误查询' : '暂无查询记录'}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {resultPanelTab === 'result' && result?.success && result.columns && result.rows && (
+            <div className="query-result-data-view">
+              <div className="query-result-data-toolbar">
+                <div>
+                  <button type="button" className={resultDataTab === 'data' ? 'active' : ''} onClick={() => setResultDataTab('data')}>数据</button>
+                  <button type="button" className={resultDataTab === 'info' ? 'active' : ''} onClick={() => setResultDataTab('info')}>信息</button>
+                </div>
+                {result.editable
+                  ? <span className="query-editable-badge">可编辑 · {result.editable.tableName}</span>
+                  : <span className="query-result-readonly">只读结果</span>}
+              </div>
+              {resultDataTab === 'data' ? <div className="query-table-wrap">
+                <table className="query-table">
+                  <thead><tr>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+                  <tbody>{result.rows.map((row, index) => <tr key={index}>
+                    {result.columns!.map((column) => {
+                      const editableColumn = result.editable?.columns.find((item) => item.resultName === column)
+                      const isEditing = editingCell?.rowIndex === index && editingCell.column === column
+                      return <td
+                        key={column}
+                        className={`${editableColumn ? 'editable-cell' : ''}${isEditing ? ' editing-cell' : ''}`}
+                        onClick={() => editableColumn && !isEditing && startEditingCell(index, column)}
+                        onContextMenu={(event) => {
+                          event.preventDefault()
+                          setResultContextMenu({ x: Math.min(event.clientX, window.innerWidth - 196), y: Math.min(event.clientY, window.innerHeight - 190), rowIndex: index, column })
+                        }}
+                      >
+                        {isEditing && editableColumn
+                          ? <div className="cell-editor" onClick={(event) => event.stopPropagation()}>
+                            <input
+                              autoFocus
+                              value={draftCellValue === null || draftCellValue === undefined ? '' : String(draftCellValue)}
+                              onChange={(event) => setDraftCellValue(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') { event.preventDefault(); void saveEditingCell() }
+                                if (event.key === 'Escape') setEditingCell(null)
+                              }}
+                            />
+                            <button type="button" title="保存字段" disabled={savingRow} onClick={() => void saveEditingCell()}><FloppyDisk /></button>
+                            <button type="button" title="取消编辑" disabled={savingRow} onClick={() => setEditingCell(null)}><X /></button>
+                          </div>
+                          : displayValue(row[column])}
+                      </td>
+                    })}
+                  </tr>)}</tbody>
+                </table>
+              </div> : <div className="query-result-info">
+                <dl><dt>返回记录</dt><dd>{result.rows.length}</dd></dl>
+                <dl><dt>字段数量</dt><dd>{result.columns.length}</dd></dl>
+                <dl><dt>运行时间</dt><dd>{formatDurationSeconds(result.durationMs)}</dd></dl>
+                <dl><dt>编辑状态</dt><dd>{result.editable ? `可编辑（${result.editable.tableName}）` : '只读'}</dd></dl>
+              </div>}
+            </div>
+          )}
+        </div>}
+
+        {!resultPanelCollapsed && <footer className="query-result-footer">
+          <span>{result?.rows ? `${result.rows.length} 条记录` : result ? formatDurationSeconds(result.durationMs) : '就绪'}</span>
+          <span>Line: {cursorPosition.line}&nbsp;&nbsp;Col: {cursorPosition.column}</span>
+        </footer>}
+      </section>}
       {resultContextMenu && result?.rows?.[resultContextMenu.rowIndex] && (
         <div
           className="connection-context-menu query-result-context-menu"

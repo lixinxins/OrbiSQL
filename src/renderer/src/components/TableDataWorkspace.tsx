@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { ArrowsClockwise, CaretLeft, CaretRight, Copy, FloppyDisk, Funnel, PencilSimple, Trash, X } from '@phosphor-icons/react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowLeft, ArrowLineLeft, ArrowLineRight, ArrowRight, ArrowsClockwise, CaretRight, Check, Copy, Funnel, GearSix, ListBullets, Minus, PencilSimple, Plus, Stop, Table as TableIcon, Trash, X } from '@phosphor-icons/react'
 import type { DatabaseConnection, DatabaseItem, QueryExecutionResult, TableDataFilter, TableDataFilterOperator, TableItem } from '../../../shared/connections'
 import { useConfirmDialog } from './ConfirmDialog'
 
@@ -11,23 +11,26 @@ interface TableDataWorkspaceProps {
   onDesignTable: (connection: DatabaseConnection, database: DatabaseItem, table: TableItem) => void
 }
 
-const PAGE_SIZE = 100
-
 function TableDataWorkspace({ active, connection, database, table, onDesignTable }: TableDataWorkspaceProps) {
   const { confirm, confirmDialog } = useConfirmDialog()
   const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(100)
   const [result, setResult] = useState<QueryExecutionResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [editingCell, setEditingCell] = useState<{ rowIndex: number; column: string } | null>(null)
   const [draftValue, setDraftValue] = useState<unknown>('')
   const [savingCell, setSavingCell] = useState(false)
-  const [deletingRow, setDeletingRow] = useState<number | null>(null)
   const [rowSaveError, setRowSaveError] = useState('')
   const [filterColumn, setFilterColumn] = useState(table.columns[0] ?? '')
   const [filterOperator, setFilterOperator] = useState<TableDataFilterOperator>('contains')
   const [filterValue, setFilterValue] = useState('')
   const [appliedFilter, setAppliedFilter] = useState<TableDataFilter | undefined>()
   const [resultContextMenu, setResultContextMenu] = useState<{ x: number; y: number; rowIndex: number; column: string } | null>(null)
+  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null)
+  const [newRowDraft, setNewRowDraft] = useState<Record<string, unknown> | null>(null)
+  const [viewMode, setViewMode] = useState<'grid' | 'record'>('grid')
+  const [showPageSize, setShowPageSize] = useState(false)
+  const loadRequestId = useRef(0)
 
   useEffect(() => {
     if (!resultContextMenu) return
@@ -43,27 +46,31 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   }, [resultContextMenu])
 
   const loadData = useCallback(async (): Promise<void> => {
+    const requestId = ++loadRequestId.current
     setLoading(true)
     setEditingCell(null)
+    setSelectedRowIndex(null)
+    setNewRowDraft(null)
     setRowSaveError('')
     try {
-      setResult(await window.omnidb.tables.readData(
+      const nextResult = await window.omnidb.tables.readData(
         connection.id,
         database.name,
         table.name,
-        PAGE_SIZE,
-        page * PAGE_SIZE,
+        pageSize,
+        page * pageSize,
         appliedFilter
-      ))
+      )
+      if (requestId === loadRequestId.current) setResult(nextResult)
     } catch (error) {
-      setResult({
+      if (requestId === loadRequestId.current) setResult({
         success: false,
         message: error instanceof Error ? error.message : '数据加载失败，请重启应用后重试'
       })
     } finally {
-      setLoading(false)
+      if (requestId === loadRequestId.current) setLoading(false)
     }
-  }, [appliedFilter, connection.id, database.name, page, table.name])
+  }, [appliedFilter, connection.id, database.name, page, pageSize, table.name])
 
   useEffect(() => {
     void loadData()
@@ -140,32 +147,29 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     result.editable.columns.forEach((column) => {
       if (column.primaryKey) primaryKeyValues[column.sourceName] = row[column.resultName]
     })
-    setDeletingRow(rowIndex)
     setRowSaveError('')
-    try {
-      const deleted = await window.omnidb.tables.deleteRow({
-        connectionId: connection.id,
-        databaseName: database.name,
-        tableName: table.name,
-        primaryKeyValues
-      })
-      if (!deleted.success) {
-        setRowSaveError(deleted.message)
-        return
-      }
-      setResult((current) => current?.rows ? {
-        ...current,
-        success: true,
-        message: deleted.message,
-        rows: current.rows.filter((_, index) => index !== rowIndex)
-      } : current)
-      setEditingCell(null)
-    } finally {
-      setDeletingRow(null)
+    const deleted = await window.omnidb.tables.deleteRow({
+      connectionId: connection.id,
+      databaseName: database.name,
+      tableName: table.name,
+      primaryKeyValues
+    })
+    if (!deleted.success) {
+      setRowSaveError(deleted.message)
+      return
     }
+    setResult((current) => current?.rows ? {
+      ...current,
+      success: true,
+      message: deleted.message,
+      rows: current.rows.filter((_, index) => index !== rowIndex)
+    } : current)
+    setEditingCell(null)
   }
 
-  const sqlIdentifier = (value: string): string => `\`${value.replaceAll('`', '``')}\``
+  const sqlIdentifier = (value: string): string => ['MySQL', 'MariaDB', 'TiDB'].includes(connection.engine)
+    ? `\`${value.replaceAll('`', '``')}\``
+    : `"${value.replaceAll('"', '""')}"`
 
   const sqlValue = (value: unknown): string => {
     if (value === null || value === undefined) return 'NULL'
@@ -218,18 +222,84 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     setFilterValue('')
   }
 
+  const selectSql = `SELECT * FROM ${sqlIdentifier(table.name)}${appliedFilter ? ' WHERE …' : ''} LIMIT ${pageSize} OFFSET ${page * pageSize}`
+
+  const addRow = (): void => {
+    if (!result?.columns?.length || loading) return
+    setNewRowDraft(Object.fromEntries(result.columns.map((column) => [column, undefined])))
+    setEditingCell(null)
+    setSelectedRowIndex(null)
+    setRowSaveError('')
+    setViewMode('grid')
+  }
+
+  const saveNewRow = async (): Promise<void> => {
+    if (!newRowDraft || !result?.columns?.length) return
+    const entries = result.columns.filter((column) => newRowDraft[column] !== undefined).map((column) => [column, newRowDraft[column]] as const)
+    const target = sqlIdentifier(table.name)
+    const insertSql = entries.length
+      ? `INSERT INTO ${target} (${entries.map(([column]) => sqlIdentifier(column)).join(', ')}) VALUES (${entries.map(([, value]) => sqlValue(value)).join(', ')})`
+      : ['MySQL', 'MariaDB', 'TiDB'].includes(connection.engine)
+        ? `INSERT INTO ${target} () VALUES ()`
+        : `INSERT INTO ${target} DEFAULT VALUES`
+    setSavingCell(true)
+    try {
+      const inserted = await window.omnidb.queries.execute(connection.id, database.name, insertSql)
+      if (!inserted.success) {
+        setRowSaveError(inserted.message)
+        return
+      }
+      setNewRowDraft(null)
+      await loadData()
+    } finally {
+      setSavingCell(false)
+    }
+  }
+
+  const savePendingChange = (): void => {
+    if (newRowDraft) void saveNewRow()
+    else if (editingCell) void saveEditingCell()
+  }
+
+  const cancelPendingChange = (): void => {
+    setNewRowDraft(null)
+    setEditingCell(null)
+    setRowSaveError('')
+  }
+
+  const stopLoading = (): void => {
+    if (!loading) return
+    loadRequestId.current += 1
+    setLoading(false)
+  }
+
+  const goToLastPage = async (): Promise<void> => {
+    if (loading) return
+    if (appliedFilter) {
+      setRowSaveError('筛选状态下无法直接定位末页')
+      return
+    }
+    const counted = await window.omnidb.queries.execute(
+      connection.id,
+      database.name,
+      `SELECT COUNT(*) AS total FROM ${sqlIdentifier(table.name)}`
+    )
+    if (!counted.success || !counted.rows?.length) {
+      setRowSaveError(counted.message || '无法获取数据总数')
+      return
+    }
+    const total = Number(counted.rows[0].total ?? Object.values(counted.rows[0])[0] ?? 0)
+    setPage(Math.max(0, Math.ceil(total / pageSize) - 1))
+  }
+
   return (
     <section className={`table-data-workspace${active ? ' active' : ''}`}>
       <div className="table-data-toolbar">
         <div className="table-data-location">
           <strong>{table.name}</strong><span>{connection.name} / {database.name}</span>
         </div>
-        <button type="button" onClick={() => void loadData()} disabled={loading}><ArrowsClockwise />{loading ? '加载中…' : '刷新数据'}</button>
         <button type="button" onClick={() => onDesignTable(connection, database, table)}><PencilSimple />设计字段</button>
         <span className="table-data-toolbar-spacer" />
-        <span className="table-data-page">第 {page + 1} 页 · 每页 {PAGE_SIZE} 行</span>
-        <button type="button" className="table-data-page-button" disabled={loading || page === 0} onClick={() => setPage((current) => current - 1)} aria-label="上一页"><CaretLeft /></button>
-        <button type="button" className="table-data-page-button" disabled={loading || rows.length < PAGE_SIZE} onClick={() => setPage((current) => current + 1)} aria-label="下一页"><CaretRight /></button>
       </div>
       <div className="table-data-filter">
         <Funnel />
@@ -264,30 +334,38 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
         <button type="button" className="reset-filter" disabled={!appliedFilter} onClick={resetFilter}><X />重置</button>
         {appliedFilter && <span className="active-filter-label">已应用：{appliedFilter.column}</span>}
       </div>
-      <div className={`query-message${rowSaveError || result && !result.success ? ' error' : result?.success ? ' success' : ''}`}>
-        <span>{rowSaveError || result?.message || '正在加载数据…'}</span>
-        {result?.editable
-          ? <span className="query-editable-badge">支持编辑</span>
-          : result?.success && <span className="table-readonly-badge">只读 · 表缺少主键</span>}
-      </div>
+      {(rowSaveError || result && !result.success) && <div className="query-message error">
+        <span>{rowSaveError || result?.message}</span>
+      </div>}
       <div className="table-data-grid-wrap">
-        {result?.success && result.columns && (
+        {viewMode === 'grid' && result?.success && result.columns && (
           <table className="query-table table-data-grid">
-            <thead><tr>{result.editable && <th className="query-row-actions">操作</th>}{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
-            <tbody>{rows.map((row, index) => <tr key={index} className={editingCell?.rowIndex === index ? 'editing' : ''}>
-              {result.editable && <td className="query-row-actions" onContextMenu={(event) => {
-                event.preventDefault()
-                setResultContextMenu({ x: Math.min(event.clientX, window.innerWidth - 196), y: Math.min(event.clientY, window.innerHeight - 190), rowIndex: index, column: '' })
-              }}>
-                <button type="button" className="delete-data-row" title="删除此行" disabled={deletingRow !== null || savingCell} onClick={() => void deleteRow(index)}><Trash /></button>
-              </td>}
+            <thead><tr>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+            <tbody>
+            {newRowDraft && <tr className="new-data-row">
+              {result.columns.map((column) => <td key={column} className="editing-cell">
+                <input
+                  value={newRowDraft[column] === undefined || newRowDraft[column] === null ? '' : String(newRowDraft[column])}
+                  placeholder="默认值"
+                  onChange={(event) => setNewRowDraft((current) => current ? { ...current, [column]: event.target.value } : current)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void saveNewRow()
+                    if (event.key === 'Escape') cancelPendingChange()
+                  }}
+                />
+              </td>)}
+            </tr>}
+            {rows.map((row, index) => <tr key={index} className={`${editingCell?.rowIndex === index ? 'editing ' : ''}${selectedRowIndex === index ? 'selected' : ''}`}>
               {result.columns!.map((column) => {
                 const editableColumn = result.editable?.columns.find((item) => item.resultName === column)
                 const isEditing = editingCell?.rowIndex === index && editingCell.column === column
                 return <td
                   key={column}
                   className={`${editableColumn ? 'editable-cell' : ''}${isEditing ? ' editing-cell' : ''}`}
-                  onClick={() => editableColumn && !isEditing && startEditingCell(index, column)}
+                  onClick={() => {
+                    setSelectedRowIndex(index)
+                    if (editableColumn && !isEditing) startEditingCell(index, column)
+                  }}
                   onContextMenu={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
@@ -295,7 +373,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
                   }}
                 >
                   {isEditing
-                    ? <span className="cell-editor">
+                    ? <span className="cell-editor table-data-cell-editor">
                       <input
                         autoFocus
                         value={draftValue === null || draftValue === undefined ? '' : String(draftValue)}
@@ -305,16 +383,51 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
                           if (event.key === 'Escape') setEditingCell(null)
                         }}
                       />
-                      <button type="button" title="保存字段" disabled={savingCell} onClick={() => void saveEditingCell()}><FloppyDisk /></button>
-                      <button type="button" title="取消编辑" disabled={savingCell} onClick={() => setEditingCell(null)}><X /></button>
                     </span>
                     : displayValue(row[column])}
                 </td>
               })}
-            </tr>)}</tbody>
+            </tr>)}
+            </tbody>
           </table>
         )}
-        {result?.success && !rows.length && <div className="table-data-empty">当前数据表中没有数据</div>}
+        {viewMode === 'record' && result?.success && result.columns && (
+          <div className="table-record-view">
+            {selectedRowIndex !== null && rows[selectedRowIndex]
+              ? result.columns.map((column) => <dl key={column}><dt>{column}</dt><dd>{displayValue(rows[selectedRowIndex][column])}</dd></dl>)
+              : <div className="table-data-empty">请先在表格视图中选择一条记录</div>}
+          </div>
+        )}
+        {viewMode === 'grid' && result?.success && !rows.length && !newRowDraft && <div className="table-data-empty">当前数据表中没有数据</div>}
+      </div>
+      <div className="table-data-bottom-toolbar">
+        <div className="table-data-bottom-actions">
+          <button type="button" title="新增记录" disabled={!result?.success || !result.columns?.length || loading || Boolean(newRowDraft)} onClick={addRow}><Plus /></button>
+          <button type="button" title="删除选中记录" disabled={selectedRowIndex === null || !result?.editable || loading} onClick={() => selectedRowIndex !== null && void deleteRow(selectedRowIndex)}><Minus /></button>
+          <button type="button" title="保存修改" disabled={savingCell || !newRowDraft && !editingCell} onClick={savePendingChange}><Check /></button>
+          <button type="button" title="取消修改" disabled={!newRowDraft && !editingCell} onClick={cancelPendingChange}><X /></button>
+          <button type="button" title="刷新数据" disabled={loading} onClick={() => void loadData()}><ArrowsClockwise /></button>
+          <button type="button" title="停止加载" disabled={!loading} onClick={stopLoading}><Stop weight="fill" /></button>
+        </div>
+        <code className="table-data-current-sql" title={selectSql}>{selectSql}</code>
+        <div className="table-data-bottom-pagination">
+          <button type="button" title="首页" disabled={loading || page === 0} onClick={() => setPage(0)}><ArrowLineLeft /></button>
+          <button type="button" title="上一页" disabled={loading || page === 0} onClick={() => setPage((current) => current - 1)}><ArrowLeft /></button>
+          <input value={page + 1} aria-label="当前页码" onChange={(event) => {
+            const nextPage = Number.parseInt(event.target.value, 10)
+            if (Number.isFinite(nextPage) && nextPage > 0) setPage(nextPage - 1)
+          }} />
+          <button type="button" title="下一页" disabled={loading || rows.length < pageSize} onClick={() => setPage((current) => current + 1)}><ArrowRight /></button>
+          <button type="button" title="末页" disabled={loading} onClick={() => void goToLastPage()}><ArrowLineRight /></button>
+          <div className="table-data-page-size-host">
+            <button type="button" title="每页数量" onClick={() => setShowPageSize((current) => !current)}><GearSix /></button>
+            {showPageSize && <div className="table-data-page-size-menu">
+              {[30, 50, 100, 200, 500].map((size) => <button type="button" className={pageSize === size ? 'active' : ''} key={size} onClick={() => { setPage(0); setPageSize(size); setShowPageSize(false) }}>{size} 行/页</button>)}
+            </div>}
+          </div>
+          <button type="button" className={viewMode === 'grid' ? 'active' : ''} title="表格视图" onClick={() => setViewMode('grid')}><TableIcon /></button>
+          <button type="button" className={viewMode === 'record' ? 'active' : ''} title="记录视图" onClick={() => setViewMode('record')}><ListBullets /></button>
+        </div>
       </div>
       {resultContextMenu && result?.rows?.[resultContextMenu.rowIndex] && (
         <div
