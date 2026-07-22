@@ -38,12 +38,14 @@ function SettingsDialog({ language, theme, onLanguageChange, onThemeChange, onCl
           </div>
           <div className="settings-row settings-theme-row">
             <span className="settings-row-icon"><Sun /></span>
-            <div><strong>外观主题</strong><small>选择一套浅色主题，切换后立即生效</small></div>
+            <div><strong>外观主题</strong><small>选择切换外观主题，设置后立即生效</small></div>
             <div className="theme-card-grid" role="radiogroup" aria-label="外观主题">
               {([
-                { value: 'classic', label: '经典蓝', colors: ['#4f6df5', '#edf1ff'] },
-                { value: 'slate', label: '柔和灰', colors: ['#607185', '#edf1f4'] },
-                { value: 'violet', label: '紫罗兰', colors: ['#7559d9', '#f1edff'] }
+                { value: 'system', label: '跟随系统', colors: ['#6366f1', '#161b22'] },
+                { value: 'light', label: '明亮浅色', colors: ['#4f6df5', '#f6f8fb'] },
+                { value: 'classic', label: '经典蓝', colors: ['#6366f1', '#0d1117'] },
+                { value: 'slate', label: '柔和灰', colors: ['#64748b', '#111827'] },
+                { value: 'violet', label: '紫罗兰', colors: ['#8b5cf6', '#0f0a1c'] }
               ] as Array<{ value: AppTheme; label: string; colors: [string, string] }>).map((option) => (
                 <button
                   type="button"
@@ -56,7 +58,7 @@ function SettingsDialog({ language, theme, onLanguageChange, onThemeChange, onCl
                   <span className="theme-card-preview" style={{ background: option.colors[1] }}>
                     <i style={{ background: option.colors[0] }} />
                     <i style={{ background: option.colors[0] }} />
-                    <i style={{ background: '#fff' }} />
+                    <i style={{ background: option.colors[1] === '#f6f8fb' ? '#ffffff' : '#21262d' }} />
                   </span>
                   <span className="theme-card-name">{option.label}</span>
                   <span className="theme-card-check"><Check weight="bold" /></span>

@@ -9,9 +9,11 @@ import {
   CircleNotch,
   Database,
   DownloadSimple,
+  FileCode,
   FileSql,
   FolderOpen,
   HardDrives,
+  Info,
   MagnifyingGlass,
   PencilSimple,
   Plus,
@@ -20,14 +22,17 @@ import {
   Rows,
   Table,
   Trash,
-  UploadSimple
+  UploadSimple,
+  Wrench
 } from '@phosphor-icons/react'
-import type { DatabaseConnection, DatabaseEngine, DatabaseItem, TableItem } from '../../../shared/connections'
+import type { ConnectionGroup, DatabaseConnection, DatabaseEngine, DatabaseItem, TableItem } from '../../../shared/connections'
 
 interface ConnectionSidebarProps {
   connections: DatabaseConnection[]
   loading: boolean
+  groupsRefreshRequest: number
   onNewConnection: () => void
+  onGroupsChanged: () => void
   onEditConnection: (connection: DatabaseConnection) => void
   onToggleConnection: (connection: DatabaseConnection) => Promise<boolean>
   onDuplicateConnection: (connection: DatabaseConnection) => void
@@ -53,6 +58,17 @@ interface ConnectionSidebarProps {
   onExportTable: (connection: DatabaseConnection, database: DatabaseItem, table: TableItem) => void
   onSelectImportTable: (connection: DatabaseConnection, database: DatabaseItem) => void
   onSelectExportTable: (connection: DatabaseConnection, database: DatabaseItem) => void
+  onGenerateSql?: (connection: DatabaseConnection, database: DatabaseItem, table: TableItem, sqlKind: 'select' | 'insert' | 'update' | 'delete' | 'ddl') => void
+  onMaintainTable?: (connection: DatabaseConnection, database: DatabaseItem, table: TableItem, action: 'check' | 'optimize' | 'analyze') => void
+  onShowTableInfo?: (connection: DatabaseConnection, database: DatabaseItem, table: TableItem) => void
+  onObjectAction?: (connection: DatabaseConnection, database: DatabaseItem, groupKey: string, objectName: string, action: 'query' | 'ddl' | 'edit' | 'copy' | 'drop') => void
+  onSetConnectionColor?: (connection: DatabaseConnection, color: string) => void
+  onExportDataDictionary?: (connection: DatabaseConnection, database: DatabaseItem) => void
+  onShowProcesslist?: (connection: DatabaseConnection) => void
+  onCreateObject?: (connection: DatabaseConnection, database: DatabaseItem, groupKey: string, groupLabel: string) => void
+  onCopySqlStatement?: (connection: DatabaseConnection, database: DatabaseItem, table: TableItem, type: 'select' | 'insert') => void
+  onTruncateDatabase?: (connection: DatabaseConnection, database: DatabaseItem) => void
+  onCopyDatabase?: (connection: DatabaseConnection, database: DatabaseItem, includeData: boolean) => void
 }
 
 interface ConnectionContextMenu {
@@ -68,6 +84,17 @@ interface DatabaseContextMenu extends ConnectionContextMenu {
 
 interface TableContextMenu extends DatabaseContextMenu {
   table: TableItem
+}
+
+interface ObjectContextMenu extends DatabaseContextMenu {
+  groupKey: string
+  groupLabel: string
+  objectName: string
+}
+
+interface ObjectGroupContextMenu extends DatabaseContextMenu {
+  groupKey: string
+  groupLabel: string
 }
 
 type TableGroupContextMenu = DatabaseContextMenu
@@ -185,7 +212,9 @@ const engineTreeConfigs: Record<DatabaseEngine, EngineTreeConfig> = {
 function ConnectionSidebar({
   connections,
   loading,
+  groupsRefreshRequest,
   onNewConnection,
+  onGroupsChanged,
   onEditConnection,
   onToggleConnection,
   onDuplicateConnection,
@@ -210,7 +239,18 @@ function ConnectionSidebar({
   onCopyTable,
   onExportTable,
   onSelectImportTable,
-  onSelectExportTable
+  onSelectExportTable,
+  onGenerateSql,
+  onMaintainTable,
+  onShowTableInfo,
+  onObjectAction,
+  onSetConnectionColor,
+  onExportDataDictionary,
+  onShowProcesslist,
+  onCreateObject,
+  onCopySqlStatement,
+  onTruncateDatabase,
+  onCopyDatabase
 }: ConnectionSidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const savedWidth = Number(localStorage.getItem('omnidb.sidebar.width'))
@@ -230,18 +270,24 @@ function ConnectionSidebar({
   const [expandedTableGroups, setExpandedTableGroups] = useState<string[]>([])
   const [selectedTable, setSelectedTable] = useState('')
   const [search, setSearch] = useState('')
+  const [connectionGroups, setConnectionGroups] = useState<ConnectionGroup[]>([])
+  const [collapsedConnectionGroups, setCollapsedConnectionGroups] = useState<number[]>([])
   const [contextMenu, setContextMenu] = useState<ConnectionContextMenu | null>(null)
   const [databaseContextMenu, setDatabaseContextMenu] = useState<DatabaseContextMenu | null>(null)
   const [tableContextMenu, setTableContextMenu] = useState<TableContextMenu | null>(null)
   const [tableGroupContextMenu, setTableGroupContextMenu] = useState<TableGroupContextMenu | null>(null)
+  const [objectContextMenu, setObjectContextMenu] = useState<ObjectContextMenu | null>(null)
+  const [objectGroupContextMenu, setObjectGroupContextMenu] = useState<ObjectGroupContextMenu | null>(null)
 
   useEffect(() => {
-    if (!contextMenu && !databaseContextMenu && !tableContextMenu && !tableGroupContextMenu) return
+    if (!contextMenu && !databaseContextMenu && !tableContextMenu && !tableGroupContextMenu && !objectContextMenu && !objectGroupContextMenu) return
     const closeMenu = (): void => {
       setContextMenu(null)
       setDatabaseContextMenu(null)
       setTableContextMenu(null)
       setTableGroupContextMenu(null)
+      setObjectContextMenu(null)
+      setObjectGroupContextMenu(null)
     }
     const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
       if (event.key === 'Escape') closeMenu()
@@ -260,6 +306,10 @@ function ConnectionSidebar({
     if (connectionClickTimer.current !== null) window.clearTimeout(connectionClickTimer.current)
   }, [])
 
+  const loadConnectionGroups = (): void => { void window.omnidb.connections.listGroups().then(setConnectionGroups) }
+  useEffect(loadConnectionGroups, [])
+  useEffect(() => { if (groupsRefreshRequest > 0) loadConnectionGroups() }, [groupsRefreshRequest])
+
   useEffect(() => {
     if (!firstConnection || selectedConnection !== 0) return
     setSelectedConnection(firstConnection.id)
@@ -273,6 +323,31 @@ function ConnectionSidebar({
       .toLowerCase()
       .includes(normalizedSearch)
   )
+  const connectionListRows: Array<
+    | { kind: 'divider' }
+    | { kind: 'group'; group: ConnectionGroup; count: number }
+    | { kind: 'connection'; connection: DatabaseConnection; grouped: boolean }
+  > = []
+  const ungrouped = visibleConnections.filter((connection) => !connection.groupId)
+  connectionGroups.forEach((group) => {
+    const children = visibleConnections.filter((connection) => connection.groupId === group.id)
+    connectionListRows.push({ kind: 'group', group, count: children.length })
+    if (!collapsedConnectionGroups.includes(group.id)) children.forEach((connection) => connectionListRows.push({ kind: 'connection', connection, grouped: true }))
+  })
+  if (connectionGroups.length && ungrouped.length) connectionListRows.push({ kind: 'divider' })
+  ungrouped.forEach((connection) => connectionListRows.push({ kind: 'connection', connection, grouped: false }))
+
+  const assignGroup = async (connectionId: number, groupId: number | null): Promise<void> => {
+    const result = await window.omnidb.connections.setGroup(connectionId, groupId)
+    if (result.success) onGroupsChanged()
+    setContextMenu(null)
+  }
+  const deleteGroup = async (groupId: number): Promise<void> => {
+    const result = await window.omnidb.connections.deleteGroup(groupId)
+    if (!result.success) return
+    loadConnectionGroups(); onGroupsChanged()
+  }
+  const toggleConnectionGroup = (groupId: number): void => setCollapsedConnectionGroups((current) => current.includes(groupId) ? current.filter((id) => id !== groupId) : [...current, groupId])
 
   const toggleDatabase = (
     databaseKey: string,
@@ -459,13 +534,20 @@ function ConnectionSidebar({
               </div>
             ))}
           </div>
-        ) : visibleConnections.map((connection) => {
+        ) : connectionListRows.map((row) => {
+          if (row.kind === 'divider') return <div className="connection-list-divider" key="connection-list-divider" aria-hidden="true" />
+          if (row.kind === 'group') {
+            const groupId = row.group.id
+            const collapsed = collapsedConnectionGroups.includes(groupId)
+            return <div className="connection-folder-row" key={`connection-folder-${groupId}`}><button type="button" onClick={() => toggleConnectionGroup(groupId)}>{collapsed ? <CaretRight /> : <CaretDown />}<FolderOpen weight="fill" /><span>{row.group.name}</span><small>{row.count}</small></button><button type="button" className="connection-folder-delete" title={`删除分组 ${row.group.name}`} onClick={() => void deleteGroup(row.group.id)}><Trash /></button></div>
+          }
+          const connection = row.connection
           const expanded = expandedConnections.includes(connection.id)
           const selected = selectedConnection === connection.id
           const treeConfig = engineTreeConfigs[connection.engine]
 
           return (
-            <div className="connection-group" key={connection.id}>
+            <div className={`connection-group${row.grouped ? ' grouped' : ' ungrouped'}`} key={connection.id}>
               <button
                 type="button"
                 className={`connection-item${selected ? ' selected' : ''}`}
@@ -497,7 +579,12 @@ function ConnectionSidebar({
                   <HardDrives weight="fill" />
                 </span>
                 <span className="connection-copy">
-                  <strong>{connection.name}</strong>
+                  <strong>
+                    {connection.name}
+                    {connection.color === '#ef4444' && <span className="connection-env-badge prod">PROD</span>}
+                    {connection.color === '#f59e0b' && <span className="connection-env-badge test">TEST</span>}
+                    {connection.color === '#10b981' && <span className="connection-env-badge dev">DEV</span>}
+                  </strong>
                   <small>{connection.engine} · {connection.databases.length} 个数据库</small>
                 </span>
                 <span className={`connection-state${connection.connected ? ' online' : ''}`} />
@@ -664,6 +751,19 @@ function ConnectionSidebar({
                                     className="tree-row tree-section"
                                     aria-expanded={groupExpanded}
                                     onClick={() => toggleGroup(groupKey)}
+                                    onContextMenu={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      setObjectGroupContextMenu({
+                                        x: event.clientX,
+                                        y: event.clientY,
+                                        connection,
+                                        database,
+                                        databaseKey,
+                                        groupKey: group.key,
+                                        groupLabel: group.label
+                                      })
+                                    }}
                                   >
                                     {groupExpanded ? <CaretDown /> : <CaretRight />}
                                     <Code />
@@ -671,7 +771,25 @@ function ConnectionSidebar({
                                     <span>{objects.length}</span>
                                   </button>
                                   {groupExpanded && objects.map((objectName) => (
-                                    <button type="button" className="tree-row tree-leaf" key={`${groupKey}:${objectName}`}>
+                                    <button
+                                      type="button"
+                                      className="tree-row tree-leaf"
+                                      key={`${groupKey}:${objectName}`}
+                                      onContextMenu={(event) => {
+                                        event.preventDefault()
+                                        event.stopPropagation()
+                                        setObjectContextMenu({
+                                          x: event.clientX,
+                                          y: event.clientY,
+                                          connection,
+                                          database,
+                                          databaseKey,
+                                          groupKey: group.key,
+                                          groupLabel: group.label,
+                                          objectName
+                                        })
+                                      }}
+                                    >
                                       <Rows /><span className="tree-label">{objectName}</span>
                                     </button>
                                   ))}
@@ -726,8 +844,40 @@ function ConnectionSidebar({
             <Trash />删除连接
           </button>
           <span className="context-menu-divider" />
+          <div className="context-submenu-host">
+            <button type="button"><FolderOpen /><span className="context-menu-label">移动到分组</span><CaretRight className="context-submenu-caret" /></button>
+            <div className={`connection-context-menu context-submenu${contextMenu.x > window.innerWidth - 390 ? ' left' : ''}`}>
+              <button type="button" onClick={() => void assignGroup(contextMenu.connection.id, null)}>{!contextMenu.connection.groupId ? '✓ ' : ''}未分组</button>
+              {connectionGroups.map((group) => <button type="button" key={group.id} onClick={() => void assignGroup(contextMenu.connection.id, group.id)}>{contextMenu.connection.groupId === group.id ? '✓ ' : ''}{group.name}</button>)}
+              {!connectionGroups.length && <button type="button" disabled>请先在侧栏新建分组</button>}
+            </div>
+          </div>
           <button type="button" onClick={() => { onRefreshConnection(contextMenu.connection); setContextMenu(null) }}>
             <ArrowsClockwise />刷新
+          </button>
+          <div className="context-submenu-host">
+            <button type="button"><Wrench /><span className="context-menu-label">环境色彩标识</span><CaretRight className="context-submenu-caret" /></button>
+            <div className={`connection-context-menu context-submenu${contextMenu.x > window.innerWidth - 390 ? ' left' : ''}`}>
+              <button type="button" onClick={() => { onSetConnectionColor?.(contextMenu.connection, '#ef4444'); setContextMenu(null) }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} /> 生产环境 (PROD)
+              </button>
+              <button type="button" onClick={() => { onSetConnectionColor?.(contextMenu.connection, '#f59e0b'); setContextMenu(null) }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} /> 测试环境 (TEST)
+              </button>
+              <button type="button" onClick={() => { onSetConnectionColor?.(contextMenu.connection, '#10b981'); setContextMenu(null) }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block' }} /> 开发环境 (DEV)
+              </button>
+              <button type="button" onClick={() => { onSetConnectionColor?.(contextMenu.connection, '#6366f1'); setContextMenu(null) }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#6366f1', display: 'inline-block' }} /> 经典蓝 (Classic)
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={!contextMenu.connection.open}
+            onClick={() => { onShowProcesslist?.(contextMenu.connection); setContextMenu(null) }}
+          >
+            <Rows />查看活动会话 / 进程
           </button>
           <button
             type="button"
@@ -769,9 +919,23 @@ function ConnectionSidebar({
           <button type="button" onClick={() => { onNewQuery(databaseContextMenu.connection, databaseContextMenu.database); setDatabaseContextMenu(null) }}>
             <Code />新建查询
           </button>
+          <button type="button" onClick={() => { onExportDataDictionary?.(databaseContextMenu.connection, databaseContextMenu.database); setDatabaseContextMenu(null) }}>
+            <FileCode />生成/导出数据字典 (Markdown)
+          </button>
           <button type="button" onClick={() => { onRunDatabaseSqlFile(databaseContextMenu.connection, databaseContextMenu.database); setDatabaseContextMenu(null) }}>
             <FileSql />运行 SQL 文件
           </button>
+          <div className="context-submenu-host">
+            <button type="button"><Copy /><span className="context-menu-label">复制数据库</span><CaretRight className="context-submenu-caret" /></button>
+            <div className={`connection-context-menu context-submenu${databaseContextMenu.x > window.innerWidth - 390 ? ' left' : ''}`}>
+              <button type="button" onClick={() => { onCopyDatabase?.(databaseContextMenu.connection, databaseContextMenu.database, false); setDatabaseContextMenu(null) }}>
+                <Copy />仅复制结构
+              </button>
+              <button type="button" onClick={() => { onCopyDatabase?.(databaseContextMenu.connection, databaseContextMenu.database, true); setDatabaseContextMenu(null) }}>
+                <Copy weight="fill" />复制结构和数据
+              </button>
+            </div>
+          </div>
           <div className="context-submenu-host">
             <button type="button"><DownloadSimple /><span className="context-menu-label">导出 SQL</span><CaretRight className="context-submenu-caret" /></button>
             <div className={`connection-context-menu context-submenu${databaseContextMenu.x > window.innerWidth - 390 ? ' left' : ''}`}>
@@ -783,6 +947,10 @@ function ConnectionSidebar({
               </button>
             </div>
           </div>
+          <span className="context-menu-divider" />
+          <button type="button" className="danger" onClick={() => { onTruncateDatabase?.(databaseContextMenu.connection, databaseContextMenu.database); setDatabaseContextMenu(null) }}>
+            <Broom />清空全库所有表数据
+          </button>
         </div>
       )}
       {tableContextMenu && (
@@ -800,8 +968,64 @@ function ConnectionSidebar({
           <button type="button" onClick={() => { onRenameTable(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table); setTableContextMenu(null) }}>
             <PencilSimple />编辑表名称
           </button>
+          <div className="context-submenu-host">
+            <button type="button"><Copy /><span className="context-menu-label">复制表</span><CaretRight className="context-submenu-caret" /></button>
+            <div className={`connection-context-menu context-submenu${tableContextMenu.x > window.innerWidth - 390 ? ' left' : ''}`}>
+              <button type="button" onClick={() => { onCopyTable(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, false); setTableContextMenu(null) }}>
+                <Copy />仅复制结构
+              </button>
+              <button type="button" onClick={() => { onCopyTable(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, true); setTableContextMenu(null) }}>
+                <Copy weight="fill" />复制结构和数据
+              </button>
+            </div>
+          </div>
           <button type="button" onClick={() => { void navigator.clipboard.writeText(tableContextMenu.table.name); setTableContextMenu(null) }}>
             <Copy />复制表名称
+          </button>
+          <button type="button" onClick={() => { void onCopySqlStatement?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'select'); setTableContextMenu(null) }}>
+            <Copy />复制 SELECT 语句
+          </button>
+          <button type="button" onClick={() => { void onCopySqlStatement?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'insert'); setTableContextMenu(null) }}>
+            <Copy />复制 INSERT 语句
+          </button>
+          <span className="context-menu-divider" />
+          <div className="context-submenu-host">
+            <button type="button"><FileCode /><span className="context-menu-label">生成 SQL</span><CaretRight className="context-submenu-caret" /></button>
+            <div className={`connection-context-menu context-submenu${tableContextMenu.x > window.innerWidth - 390 ? ' left' : ''}`}>
+              <button type="button" onClick={() => { onGenerateSql?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'select'); setTableContextMenu(null) }}>
+                <Code />生成 SELECT 语句
+              </button>
+              <button type="button" onClick={() => { onGenerateSql?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'insert'); setTableContextMenu(null) }}>
+                <Plus />生成 INSERT 语句
+              </button>
+              <button type="button" onClick={() => { onGenerateSql?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'update'); setTableContextMenu(null) }}>
+                <PencilSimple />生成 UPDATE 语句
+              </button>
+              <button type="button" onClick={() => { onGenerateSql?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'delete'); setTableContextMenu(null) }}>
+                <Trash />生成 DELETE 语句
+              </button>
+              <span className="context-menu-divider" />
+              <button type="button" onClick={() => { onGenerateSql?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'ddl'); setTableContextMenu(null) }}>
+                <FileSql />查看建表 DDL
+              </button>
+            </div>
+          </div>
+          <div className="context-submenu-host">
+            <button type="button"><Wrench /><span className="context-menu-label">表维护工具</span><CaretRight className="context-submenu-caret" /></button>
+            <div className={`connection-context-menu context-submenu${tableContextMenu.x > window.innerWidth - 390 ? ' left' : ''}`}>
+              <button type="button" onClick={() => { onMaintainTable?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'check'); setTableContextMenu(null) }}>
+                <Wrench />检查表 (CHECK TABLE)
+              </button>
+              <button type="button" onClick={() => { onMaintainTable?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'optimize'); setTableContextMenu(null) }}>
+                <Broom />优化表 (OPTIMIZE TABLE)
+              </button>
+              <button type="button" onClick={() => { onMaintainTable?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table, 'analyze'); setTableContextMenu(null) }}>
+                <ArrowsClockwise />分析表 (ANALYZE TABLE)
+              </button>
+            </div>
+          </div>
+          <button type="button" onClick={() => { onShowTableInfo?.(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table); setTableContextMenu(null) }}>
+            <Info />查看表属性与信息
           </button>
           <span className="context-menu-divider" />
           <button type="button" className="danger" onClick={() => { onDeleteTable(tableContextMenu.connection, tableContextMenu.database, tableContextMenu.table); setTableContextMenu(null) }}>
@@ -848,10 +1072,48 @@ function ConnectionSidebar({
             <Plus />新建数据表
           </button>
           <button type="button" onClick={() => { onSelectImportTable(tableGroupContextMenu.connection, tableGroupContextMenu.database); setTableGroupContextMenu(null) }}>
-            <UploadSimple />导入 CSV
+            <UploadSimple />导入 CSV / JSON / Excel
           </button>
           <button type="button" onClick={() => { onSelectExportTable(tableGroupContextMenu.connection, tableGroupContextMenu.database); setTableGroupContextMenu(null) }}>
             <DownloadSimple />导出 CSV
+          </button>
+        </div>
+      )}
+      {objectContextMenu && (
+        <div
+          className="connection-context-menu"
+          style={{ left: objectContextMenu.x, top: objectContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => { onObjectAction?.(objectContextMenu.connection, objectContextMenu.database, objectContextMenu.groupKey, objectContextMenu.objectName, 'query'); setObjectContextMenu(null) }}>
+            <Code />打开/查询该{objectContextMenu.groupLabel.slice(0, 2)}
+          </button>
+          <button type="button" onClick={() => { onObjectAction?.(objectContextMenu.connection, objectContextMenu.database, objectContextMenu.groupKey, objectContextMenu.objectName, 'ddl'); setObjectContextMenu(null) }}>
+            <FileCode />查看定义 DDL
+          </button>
+          {objectContextMenu.groupKey === 'procedures' && <button type="button" onClick={() => { onObjectAction?.(objectContextMenu.connection, objectContextMenu.database, objectContextMenu.groupKey, objectContextMenu.objectName, 'edit'); setObjectContextMenu(null) }}>
+            <PencilSimple />可视化编辑存储过程
+          </button>}
+          <button type="button" onClick={() => { void navigator.clipboard.writeText(objectContextMenu.objectName); setObjectContextMenu(null) }}>
+            <Copy />复制名称
+          </button>
+          <span className="context-menu-divider" />
+          <button type="button" className="danger" onClick={() => { onObjectAction?.(objectContextMenu.connection, objectContextMenu.database, objectContextMenu.groupKey, objectContextMenu.objectName, 'drop'); setObjectContextMenu(null) }}>
+            <Trash />删除该{objectContextMenu.groupLabel.slice(0, 2)}
+          </button>
+        </div>
+      )}
+      {objectGroupContextMenu && (
+        <div
+          className="connection-context-menu"
+          style={{ left: objectGroupContextMenu.x, top: objectGroupContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => { onCreateObject?.(objectGroupContextMenu.connection, objectGroupContextMenu.database, objectGroupContextMenu.groupKey, objectGroupContextMenu.groupLabel); setObjectGroupContextMenu(null) }}>
+            <Plus />新建{objectGroupContextMenu.groupLabel.slice(0, 2)}
+          </button>
+          <button type="button" onClick={() => { void navigator.clipboard.writeText(objectGroupContextMenu.groupLabel); setObjectGroupContextMenu(null) }}>
+            <Copy />复制分类名称
           </button>
         </div>
       )}

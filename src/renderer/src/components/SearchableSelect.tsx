@@ -67,7 +67,9 @@ function SearchableSelect({ value, options, placeholder, disabled, onChange }: S
               type="button"
               className={option.value === value ? 'selected' : ''}
               key={option.value}
-              onClick={() => {
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
                 onChange(option.value)
                 setOpen(false)
               }}

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
-import { ArrowsInLineHorizontal, BookmarksSimple, CaretDown, CaretRight, CaretUp, Check, Code, Copy, FloppyDisk, Play, TextAlignLeft, Trash, WarningCircle, X } from '@phosphor-icons/react'
+import { ArrowsInLineHorizontal, BookmarksSimple, CaretDown, CaretRight, CaretUp, ChartBar, ChartPie, Check, ClockCounterClockwise, Code, Copy, FloppyDisk, Lightning, Play, TextAlignLeft, Trash, WarningCircle, X } from '@phosphor-icons/react'
 import { format as formatSqlText } from 'sql-formatter'
 import type { DatabaseConnection, DatabaseItem, QueryExecutionResult, SavedQuery } from '../../../shared/connections'
 import { useConfirmDialog } from './ConfirmDialog'
 import SaveQueryDialog from './SaveQueryDialog'
 import SearchableSelect from './SearchableSelect'
+import QueryResultChart from './QueryResultChart'
 
 export interface QueryContext {
   connectionId: number | null
@@ -17,6 +18,7 @@ export interface QueryContext {
 }
 
 interface QueryWorkspaceProps {
+  sessionId: string
   active: boolean
   connections: DatabaseConnection[]
   context: QueryContext
@@ -194,7 +196,7 @@ const validateSql = (sql: string, database?: DatabaseItem): SqlValidation => {
   return { tokens, errorStarts, messages: Array.from(messages) }
 }
 
-function QueryWorkspace({ active, connections, context, onDatabaseChange }: QueryWorkspaceProps) {
+function QueryWorkspace({ sessionId, active, connections, context, onDatabaseChange }: QueryWorkspaceProps) {
   const { confirm, confirmDialog } = useConfirmDialog()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const highlightRef = useRef<HTMLPreElement>(null)
@@ -225,11 +227,22 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
   const workspaceRef = useRef<HTMLElement>(null)
   const [errorCopied, setErrorCopied] = useState(false)
   const [resultPanelTab, setResultPanelTab] = useState<'message' | 'summary' | 'result'>('message')
-  const [resultDataTab, setResultDataTab] = useState<'data' | 'info'>('data')
+  const [resultDataTab, setResultDataTab] = useState<'data' | 'chart' | 'info'>('data')
   const [resultPanelVisible, setResultPanelVisible] = useState(false)
   const [resultPanelCollapsed, setResultPanelCollapsed] = useState(false)
   const [onlyErrors, setOnlyErrors] = useState(false)
   const [cursorPosition, setCursorPosition] = useState({ line: 1, column: 1 })
+  const [sqlHistory, setSqlHistory] = useState<{ sql: string; ts: number; success: boolean }[]>(() => {
+    try { return JSON.parse(localStorage.getItem('orbisql.sql-history.v1') ?? '[]') as { sql: string; ts: number; success: boolean }[] } catch { return [] }
+  })
+  const [showHistory, setShowHistory] = useState(false)
+  const [transactionActive, setTransactionActive] = useState(false)
+  const [transactionBusy, setTransactionBusy] = useState(false)
+  const transactionActiveRef = useRef(false)
+
+  useEffect(() => () => {
+    if (transactionActiveRef.current) void window.omnidb.queries.rollbackTransaction(sessionId)
+  }, [sessionId])
 
   useEffect(() => {
     if (!resultContextMenu) return
@@ -509,15 +522,52 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
     setRowSaveError('')
     setSuggestions([])
     try {
-      const nextResult = await window.omnidb.queries.execute(connectionId, databaseName, sql)
+      const nextResult = await window.omnidb.queries.execute(connectionId, databaseName, sql, transactionActive ? sessionId : undefined)
       setResult(nextResult)
       setResultPanelVisible(true)
       setResultPanelTab(nextResult.success && nextResult.columns && nextResult.rows ? 'result' : 'message')
       setResultDataTab('data')
       setResultPanelCollapsed(false)
+      // Save to history
+      setSqlHistory((prev) => {
+        const entry = { sql: sql.trim(), ts: Date.now(), success: nextResult.success }
+        const next = [entry, ...prev.filter((h) => h.sql !== sql.trim())].slice(0, 50)
+        localStorage.setItem('orbisql.sql-history.v1', JSON.stringify(next))
+        return next
+      })
     } finally {
       setRunning(false)
     }
+  }
+
+  const beginTransaction = async (): Promise<void> => {
+    if (!connectionId || !databaseName || transactionActive) return
+    setTransactionBusy(true)
+    const response = await window.omnidb.queries.beginTransaction(connectionId, databaseName, sessionId)
+    setTransactionBusy(false)
+    if (response.success) {
+      transactionActiveRef.current = true
+      setTransactionActive(true)
+    }
+    setResult({ success: response.success, message: response.message, queryCount: 0, successCount: 0, errorCount: response.success ? 0 : 1 })
+    setResultPanelVisible(true)
+    setResultPanelTab('message')
+  }
+
+  const finishTransaction = async (commit: boolean): Promise<void> => {
+    if (!transactionActive) return
+    setTransactionBusy(true)
+    const response = commit
+      ? await window.omnidb.queries.commitTransaction(sessionId)
+      : await window.omnidb.queries.rollbackTransaction(sessionId)
+    setTransactionBusy(false)
+    if (response.success) {
+      transactionActiveRef.current = false
+      setTransactionActive(false)
+    }
+    setResult({ success: response.success, message: response.message, queryCount: 0, successCount: 0, errorCount: response.success ? 0 : 1 })
+    setResultPanelVisible(true)
+    setResultPanelTab('message')
   }
 
   useEffect(() => {
@@ -672,6 +722,37 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
     setRowSaveError('')
   }
 
+  const [showSnippets, setShowSnippets] = useState(false)
+
+  const executeExplain = async (): Promise<void> => {
+    if (!connectionId || !databaseName || !sql.trim() || running) return
+    const isPg = selectedConnection?.engine === 'PostgreSQL'
+    const explainSql = sql.trim().toUpperCase().startsWith('EXPLAIN')
+      ? sql
+      : isPg ? `EXPLAIN ANALYZE ${sql}` : `EXPLAIN ${sql}`
+
+    setRunning(true)
+    setResultPanelVisible(true)
+    setResultPanelCollapsed(false)
+    setFormatError('')
+    try {
+      const res = await window.omnidb.queries.execute(connectionId, databaseName, explainSql, transactionActive ? sessionId : undefined)
+      setResult(res)
+    } catch (err) {
+      setResult({ success: false, message: err instanceof Error ? err.message : '分析执行计划失败' })
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const PRESET_SNIPPETS = [
+    { name: 'SELECT 基础查询模板', sql: 'SELECT * FROM table_name LIMIT 100;' },
+    { name: 'COUNT 统计聚合模板', sql: 'SELECT status, COUNT(*) AS total FROM table_name GROUP BY status HAVING COUNT(*) > 0;' },
+    { name: 'INNER JOIN 关联查询模板', sql: 'SELECT a.*, b.* FROM table1 a\nINNER JOIN table2 b ON a.id = b.table1_id\nWHERE a.status = 1;' },
+    { name: 'CREATE TABLE 建表 DDL 模板', sql: 'CREATE TABLE example (\n  id BIGINT PRIMARY KEY AUTO_INCREMENT,\n  name VARCHAR(255) NOT NULL,\n  status TINYINT NOT NULL DEFAULT 0,\n  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;' },
+    { name: 'CREATE INDEX 创建索引模板', sql: 'CREATE INDEX idx_status_created ON table_name (status, created_at);' }
+  ]
+
   const displayValue = (value: unknown): string => {
     if (value === null) return 'NULL'
     if (value instanceof Uint8Array) return `[二进制 ${value.byteLength} 字节]`
@@ -683,9 +764,64 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
     <section className={`query-workspace${active ? ' active' : ''}`} ref={workspaceRef}>
       <div className="query-toolbar">
         <button type="button" className="run-query" onClick={() => void execute()} disabled={running || !sql.trim()}><Play weight="fill" />{running ? '运行中…' : '运行'}</button>
-        <button type="button" className="format-query" onClick={formatSql} disabled={!sql.trim()} title="格式化 SQL（Shift + Alt + F）"><TextAlignLeft />格式化 SQL</button>
-        <button type="button" className="compress-query" onClick={compressSql} disabled={!sql.trim()} title="压缩 SQL（Shift + Alt + M）"><ArrowsInLineHorizontal />压缩 SQL</button>
+        <div className={`query-transaction-controls${transactionActive ? ' active' : ''}`} title={transactionActive ? '当前查询页已开启事务' : '手动事务模式'}>
+          <button type="button" onClick={() => void beginTransaction()} disabled={transactionBusy || transactionActive || !connectionId || !databaseName}>BEGIN</button>
+          <button type="button" onClick={() => void finishTransaction(true)} disabled={transactionBusy || !transactionActive}>COMMIT</button>
+          <button type="button" className="rollback" onClick={() => void finishTransaction(false)} disabled={transactionBusy || !transactionActive}>ROLLBACK</button>
+        </div>
+        <button type="button" className="format-query" onClick={() => void executeExplain()} disabled={running || !sql.trim()} title="一键分析执行计划 (EXPLAIN)"><ChartBar />执行计划</button>
+        <button type="button" className="format-query" onClick={formatSql} disabled={!sql.trim()} title="格式化 SQL（Shift + Alt + F）"><TextAlignLeft />格式化</button>
+        <button type="button" className="compress-query" onClick={compressSql} disabled={!sql.trim()} title="压缩 SQL（Shift + Alt + M）"><ArrowsInLineHorizontal />压缩</button>
+        <div className="saved-query-menu-host" onClick={(event) => event.stopPropagation()}>
+          <button type="button" className="saved-query-toggle" onClick={() => setShowHistory((v) => !v)}>
+            <ClockCounterClockwise />历史{sqlHistory.length ? ` ${sqlHistory.length}` : ''}<CaretDown />
+          </button>
+          {showHistory && (
+            <div className="saved-query-menu">
+              <header><strong>SQL 执行历史</strong><button type="button" style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 11 }} onClick={() => { setSqlHistory([]); localStorage.removeItem('orbisql.sql-history.v1') }}><Trash />清空</button></header>
+              <div className="saved-query-list">
+                {sqlHistory.length === 0 && <div className="saved-query-empty"><ClockCounterClockwise /><span>还没有执行历史</span></div>}
+                {sqlHistory.map((item: { sql: string; ts: number; success: boolean }) => (
+                  <div className="saved-query-item" key={item.ts}>
+                    <button type="button" className="saved-query-load" onClick={() => {
+                      setSql(item.sql)
+                      setShowHistory(false)
+                      requestAnimationFrame(() => textareaRef.current?.focus())
+                    }}>
+                      <span><strong style={{ color: item.success ? 'var(--success)' : 'var(--error)' }}>{item.success ? '✓' : '✗'}</strong><small>{new Date(item.ts).toLocaleTimeString('zh-CN')}</small></span>
+                      <code>{item.sql.replaceAll(/\s+/g, ' ').trim()}</code>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
         <button type="button" className="save-query-button" onClick={openSaveQueryDialog} disabled={!connectionId || !databaseName || !sql.trim()} title="保存查询（Command/Ctrl + S）"><FloppyDisk />保存查询</button>
+        <div className="saved-query-menu-host" onClick={(event) => event.stopPropagation()}>
+          <button type="button" className="saved-query-toggle" onClick={() => setShowSnippets((current) => !current)}>
+            <Lightning />常用 Snippets<CaretDown />
+          </button>
+          {showSnippets && (
+            <div className="saved-query-menu">
+              <header><strong>常用 SQL 代码片段</strong></header>
+              <div className="saved-query-list">
+                {PRESET_SNIPPETS.map((snippet) => (
+                  <div className="saved-query-item" key={snippet.name}>
+                    <button type="button" className="saved-query-load" onClick={() => {
+                      setSql(snippet.sql)
+                      setShowSnippets(false)
+                      requestAnimationFrame(() => textareaRef.current?.focus())
+                    }}>
+                      <span><strong>{snippet.name}</strong></span>
+                      <code>{snippet.sql.replaceAll(/\s+/g, ' ').trim()}</code>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
         <div className="saved-query-menu-host" onClick={(event) => event.stopPropagation()}>
           <button type="button" className="saved-query-toggle" disabled={!connectionId || !databaseName} onClick={() => setShowSavedQueries((current) => !current)}>
             <BookmarksSimple />已保存{savedQueries.length ? ` ${savedQueries.length}` : ''}<CaretDown />
@@ -724,6 +860,7 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
             value={databaseKey}
             options={databaseOptions}
             placeholder="请选择数据库"
+            disabled={transactionActive}
             onChange={(value) => {
               setDatabaseKey(value)
               const [nextConnectionId, nextDatabaseName = ''] = value.split('\u0000')
@@ -846,15 +983,24 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
                 <table className="query-result-summary-table">
                   <thead><tr><th>查询</th><th>消息</th><th>查询时间</th><th>获取时间</th></tr></thead>
                   <tbody>
-                    {result && (!onlyErrors || !result.success) ? <tr className={result.success ? '' : 'error'}>
-                      <td title={sql}>{sql.trim()}</td>
-                      <td title={rowSaveError || result.message}>{rowSaveError || result.message}</td>
-                      <td>{formatDurationSeconds(result.durationMs)}</td>
-                      <td>0.000000s</td>
-                    </tr> : <tr><td className="empty" colSpan={4}>{onlyErrors ? '没有错误查询' : '暂无查询记录'}</td></tr>}
+                    {result ? (result.statementResults ?? [{ index: 1, sql, success: result.success, message: rowSaveError || result.message, durationMs: result.durationMs ?? 0 }])
+                      .filter((item) => !onlyErrors || !item.success)
+                      .map((item) => <tr key={item.index} className={item.success ? '' : 'error'}>
+                        <td title={item.sql}><strong>#{item.index}</strong> {item.sql.trim()}</td>
+                        <td title={item.message}>{item.message}</td>
+                        <td>{formatDurationSeconds(item.durationMs)}</td>
+                        <td>0.000000s</td>
+                      </tr>) : <tr><td className="empty" colSpan={4}>{onlyErrors ? '没有错误查询' : '暂无查询记录'}</td></tr>}
+                    {onlyErrors && result && (result.statementResults ?? [{ success: result.success }]).every((item) => item.success) && <tr><td className="empty" colSpan={4}>没有错误查询</td></tr>}
                   </tbody>
                 </table>
               </div>
+              {result?.statementResults && result.statementResults.length > 1 && <div className="query-batch-result-list">
+                {result.statementResults.map((item) => <details key={item.index} open={!item.success}>
+                  <summary><span className={item.success ? 'success' : 'error'}>{item.success ? '成功' : '失败'}</span><strong>语句 {item.index}</strong><code>{item.sql.replaceAll(/\s+/g, ' ').trim()}</code><small>{formatDurationSeconds(item.durationMs)}</small></summary>
+                  <div><p>{item.message}</p>{item.rows && item.columns && <div className="query-batch-preview"><table><thead><tr>{item.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{item.rows.slice(0, 20).map((row, rowIndex) => <tr key={rowIndex}>{item.columns!.map((column) => <td key={column}>{displayValue(row[column])}</td>)}</tr>)}</tbody></table>{item.rows.length > 20 && <span>仅预览前 20 行，共 {item.rows.length} 行</span>}</div>}</div>
+                </details>)}
+              </div>}
             </div>
           )}
 
@@ -863,6 +1009,7 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
               <div className="query-result-data-toolbar">
                 <div>
                   <button type="button" className={resultDataTab === 'data' ? 'active' : ''} onClick={() => setResultDataTab('data')}>数据</button>
+                  <button type="button" className={resultDataTab === 'chart' ? 'active' : ''} onClick={() => setResultDataTab('chart')}><ChartPie />图表</button>
                   <button type="button" className={resultDataTab === 'info' ? 'active' : ''} onClick={() => setResultDataTab('info')}>信息</button>
                 </div>
                 {result.editable
@@ -904,7 +1051,7 @@ function QueryWorkspace({ active, connections, context, onDatabaseChange }: Quer
                     })}
                   </tr>)}</tbody>
                 </table>
-              </div> : <div className="query-result-info">
+              </div> : resultDataTab === 'chart' ? <QueryResultChart columns={result.columns} rows={result.rows} /> : <div className="query-result-info">
                 <dl><dt>返回记录</dt><dd>{result.rows.length}</dd></dl>
                 <dl><dt>字段数量</dt><dd>{result.columns.length}</dd></dl>
                 <dl><dt>运行时间</dt><dd>{formatDurationSeconds(result.durationMs)}</dd></dl>

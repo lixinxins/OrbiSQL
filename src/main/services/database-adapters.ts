@@ -1,6 +1,7 @@
 import { basename } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { Client } from 'pg'
+import { buildSslConfig, type SslConnectionConfig } from './ssl-helper'
+import { DatabaseSync, type SqliteDatabase } from './sqlite-runtime'
 import type {
   ConnectionActionResult,
   CreateTableInput,
@@ -18,7 +19,8 @@ import type {
 } from '../../shared/connections'
 import type { StoredConnection } from '../database/connection-repository'
 
-type AdapterConnection = Pick<StoredConnection, 'host' | 'port' | 'username' | 'password' | 'defaultDatabase'>
+export type AdapterConnection = Pick<StoredConnection, 'host' | 'port' | 'username' | 'password' | 'defaultDatabase'> &
+  SslConnectionConfig
 
 const quoteSqliteIdentifier = (value: string): string => `"${value.replaceAll('"', '""')}"`
 const quotePostgresIdentifier = quoteSqliteIdentifier
@@ -153,30 +155,31 @@ const postgresClient = (connection: AdapterConnection, database?: string): Clien
   user: connection.username,
   password: connection.password,
   database: database || connection.defaultDatabase || 'postgres',
-  connectionTimeoutMillis: 5000
+  connectionTimeoutMillis: 5000,
+  ssl: buildSslConfig(connection)
 })
 
 const readPostgresDatabase = async (connection: AdapterConnection, databaseName: string): Promise<DatabaseItem> => {
   const client = postgresClient(connection, databaseName)
   await client.connect()
   try {
-    const [tables, columns, indexes, constraints, triggers, views, materializedViews, functions, sequences] = await Promise.all([
-      client.query<{ name: string; comment: string }>(`
+    // pg queues concurrent query calls today, but that behavior is deprecated in pg 9.
+    // Keep one connected client and await every metadata query before issuing the next.
+    const tables = await client.query<{ name: string; comment: string }>(`
         SELECT c.relname AS name, COALESCE(obj_description(c.oid, 'pg_class'), '') AS comment
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind = 'r'
         ORDER BY c.relname
-      `),
-      client.query<{ tableName: string; name: string }>(`SELECT table_name AS "tableName", column_name AS name FROM information_schema.columns WHERE table_schema = 'public' ORDER BY table_name, ordinal_position`),
-      client.query<{ tableName: string; name: string }>(`SELECT tablename AS "tableName", indexname AS name FROM pg_catalog.pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname`),
-      client.query<{ tableName: string; name: string; type: string }>(`SELECT tc.table_name AS "tableName", tc.constraint_name AS name, tc.constraint_type AS type FROM information_schema.table_constraints tc WHERE tc.table_schema = 'public' AND tc.constraint_type IN ('FOREIGN KEY', 'CHECK') ORDER BY tc.table_name, tc.constraint_name`),
-      client.query<{ tableName: string; name: string }>(`SELECT event_object_table AS "tableName", trigger_name AS name FROM information_schema.triggers WHERE trigger_schema = 'public' ORDER BY event_object_table, trigger_name`),
-      client.query<{ name: string }>("SELECT table_name AS name FROM information_schema.views WHERE table_schema = 'public' ORDER BY table_name"),
-      client.query<{ name: string }>("SELECT matviewname AS name FROM pg_catalog.pg_matviews WHERE schemaname = 'public' ORDER BY matviewname"),
-      client.query<{ name: string }>("SELECT routine_name AS name FROM information_schema.routines WHERE routine_schema = 'public' ORDER BY routine_name"),
-      client.query<{ name: string }>("SELECT sequence_name AS name FROM information_schema.sequences WHERE sequence_schema = 'public' ORDER BY sequence_name")
-    ])
+      `)
+    const columns = await client.query<{ tableName: string; name: string }>(`SELECT table_name AS "tableName", column_name AS name FROM information_schema.columns WHERE table_schema = 'public' ORDER BY table_name, ordinal_position`)
+    const indexes = await client.query<{ tableName: string; name: string }>(`SELECT tablename AS "tableName", indexname AS name FROM pg_catalog.pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname`)
+    const constraints = await client.query<{ tableName: string; name: string; type: string }>(`SELECT tc.table_name AS "tableName", tc.constraint_name AS name, tc.constraint_type AS type FROM information_schema.table_constraints tc WHERE tc.table_schema = 'public' AND tc.constraint_type IN ('FOREIGN KEY', 'CHECK') ORDER BY tc.table_name, tc.constraint_name`)
+    const triggers = await client.query<{ tableName: string; name: string }>(`SELECT event_object_table AS "tableName", trigger_name AS name FROM information_schema.triggers WHERE trigger_schema = 'public' ORDER BY event_object_table, trigger_name`)
+    const views = await client.query<{ name: string }>("SELECT table_name AS name FROM information_schema.views WHERE table_schema = 'public' ORDER BY table_name")
+    const materializedViews = await client.query<{ name: string }>("SELECT matviewname AS name FROM pg_catalog.pg_matviews WHERE schemaname = 'public' ORDER BY matviewname")
+    const functions = await client.query<{ name: string }>("SELECT routine_name AS name FROM information_schema.routines WHERE routine_schema = 'public' ORDER BY routine_name")
+    const sequences = await client.query<{ name: string }>("SELECT sequence_name AS name FROM information_schema.sequences WHERE sequence_schema = 'public' ORDER BY sequence_name")
     const columnsByTable = groupBy(columns.rows, (row) => row.tableName, (row) => row.name)
     const indexesByTable = groupBy(indexes.rows, (row) => row.tableName, (row) => row.name)
     const foreignKeysByTable = groupBy(constraints.rows.filter((row) => row.type === 'FOREIGN KEY'), (row) => row.tableName, (row) => row.name)
@@ -589,7 +592,7 @@ export const readSqliteTableData = (
   return result.success && result.rows ? { ...result, message: `已加载 ${result.rows.length} 行数据` } : result
 }
 
-const sqliteEditableColumns = (database: DatabaseSync, tableName: string): { valid: Set<string>; primaryKeys: string[] } => {
+const sqliteEditableColumns = (database: SqliteDatabase, tableName: string): { valid: Set<string>; primaryKeys: string[] } => {
   const columns = database.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(tableName)})`).all() as unknown as Array<{ name: string; pk: number }>
   return {
     valid: new Set(columns.map((column) => column.name)),

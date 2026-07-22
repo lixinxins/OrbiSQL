@@ -1,6 +1,15 @@
 node_modules/
 out/
 release/
+harmony-client/.hvigor/
+harmony-client/build-profile.json5
+harmony-client/build/
+harmony-client/entry/build/
+harmony-client/oh_modules/
+harmony-client/entry/oh_modules/
+harmony-client/entry/src/main/resources/rawfile/orbisql/
+# 只用于本机迁移的桌面系统库及用户 SQLite 数据，不提交到公开仓库。
+harmony-client/entry/src/main/resources/rawfile/migration/
 .DS_Store
 *.log
 *.local

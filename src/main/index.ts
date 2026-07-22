@@ -13,7 +13,7 @@ import { ConnectionRepository } from './database/connection-repository'
 import { AiAgentService } from './services/ai-agent-service'
 import { ConnectionService } from './services/connection-service'
 import type { AiAgentRequest, AiExecuteProposalRequest, AiSaveModelInput } from '../shared/ai-agent'
-import type { AppLanguage, AppPreferences, CopyTableInput, CreateConnectionInput, CreateTableInput, DatabaseDefinitionInput, QueryDeleteRowInput, QueryUpdateRowInput, RenameTableInput, SaveQueryInput, TableDataFilter, UpdateConnectionInput, UpdateDatabaseInput, UpdateTableInput } from '../shared/connections'
+import type { AppLanguage, AppPreferences, ConnectionSecurityFileKind, CopyTableInput, CreateConnectionInput, CreateTableInput, DatabaseDefinitionInput, QueryDeleteRowInput, QueryUpdateRowInput, RenameTableInput, SaveQueryInput, TableDataFilter, TransferTableDataInput, UpdateConnectionInput, UpdateDatabaseInput, UpdateTableInput } from '../shared/connections'
 
 const PRODUCT_NAME = 'OrbiSQL'
 // 保留旧版数据目录，升级品牌后继续使用用户已有的连接、查询和偏好设置。
@@ -229,6 +229,10 @@ app.whenReady().then(() => {
   ipcMain.handle('ai:chat', (_event, request: AiAgentRequest) => aiAgentService.chat(request))
   ipcMain.handle('ai:execute-proposal', (_event, request: AiExecuteProposalRequest) => aiAgentService.executeProposal(request))
   ipcMain.handle('connections:list', () => connectionService.list())
+  ipcMain.handle('connections:list-groups', () => connectionService.listConnectionGroups())
+  ipcMain.handle('connections:create-group', (_event, name: string) => connectionService.createConnectionGroup(name))
+  ipcMain.handle('connections:delete-group', (_event, id: number) => connectionService.deleteConnectionGroup(id))
+  ipcMain.handle('connections:set-group', (_event, connectionId: number, groupId: number | null) => connectionService.setConnectionGroup(connectionId, groupId))
   ipcMain.handle('connections:select-sqlite-file', async () => {
     const choice = await dialog.showMessageBox({
       type: 'question',
@@ -255,6 +259,22 @@ app.whenReady().then(() => {
       filters
     })
     return selected.canceled ? null : selected.filePath ?? null
+  })
+  ipcMain.handle('connections:select-security-file', async (_event, kind: ConnectionSecurityFileKind) => {
+    const definitions: Record<ConnectionSecurityFileKind, { title: string; name: string; extensions: string[] }> = {
+      sshPrivateKey: { title: '选择 SSH 私钥', name: 'SSH 私钥', extensions: ['pem', 'key', 'ppk'] },
+      sslCa: { title: '选择 CA 证书', name: 'CA 证书', extensions: ['pem', 'crt', 'cer'] },
+      sslCert: { title: '选择客户端证书', name: '客户端证书', extensions: ['pem', 'crt', 'cer'] },
+      sslKey: { title: '选择客户端私钥', name: '客户端私钥', extensions: ['pem', 'key'] }
+    }
+    const definition = definitions[kind]
+    if (!definition) return null
+    const selected = await dialog.showOpenDialog({
+      title: definition.title,
+      properties: ['openFile'],
+      filters: [{ name: definition.name, extensions: definition.extensions }, { name: '所有文件', extensions: ['*'] }]
+    })
+    return selected.canceled ? null : selected.filePaths[0] ?? null
   })
   ipcMain.handle('connections:create', (_event, input: CreateConnectionInput) => connectionService.create(input))
   ipcMain.handle('connections:update', (_event, input: UpdateConnectionInput) => connectionService.update(input))
@@ -308,8 +328,12 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('databases:delete', (_event, connectionId: number, databaseName: string) =>
     connectionService.deleteDatabase(connectionId, databaseName))
-  ipcMain.handle('queries:execute', (_event, connectionId: number, databaseName: string, sql: string) =>
-    connectionService.executeQuery(connectionId, databaseName, sql))
+  ipcMain.handle('queries:execute', (_event, connectionId: number, databaseName: string, sql: string, sessionId?: string) =>
+    connectionService.executeQuery(connectionId, databaseName, sql, sessionId))
+  ipcMain.handle('queries:transaction-begin', (_event, connectionId: number, databaseName: string, sessionId: string) =>
+    connectionService.beginTransaction(connectionId, databaseName, sessionId))
+  ipcMain.handle('queries:transaction-commit', (_event, sessionId: string) => connectionService.commitTransaction(sessionId))
+  ipcMain.handle('queries:transaction-rollback', (_event, sessionId: string) => connectionService.rollbackTransaction(sessionId))
   ipcMain.handle('queries:list-saved', (_event, connectionId: number, databaseName: string) =>
     connectionService.listSavedQueries(connectionId, databaseName))
   ipcMain.handle('queries:save', (_event, input: SaveQueryInput) => connectionService.saveQuery(input))
@@ -336,7 +360,8 @@ app.whenReady().then(() => {
   ipcMain.handle('tables:truncate', (_event, connectionId: number, databaseName: string, tableName: string) =>
     connectionService.truncateTable(connectionId, databaseName, tableName))
   ipcMain.handle('tables:copy', (_event, input: CopyTableInput) => connectionService.copyTable(input))
-  ipcMain.handle('tables:import-csv', async (
+  ipcMain.handle('tables:transfer-data', (_event, input: TransferTableDataInput) => connectionService.transferTableData(input))
+  ipcMain.handle('tables:import-data', async (
     _event,
     connectionId: number,
     databaseName: string,
@@ -345,20 +370,30 @@ app.whenReady().then(() => {
     const selected = await dialog.showOpenDialog({
       title: `导入到 ${databaseName}.${tableName}`,
       properties: ['openFile'],
-      filters: [{ name: 'CSV 文件', extensions: ['csv'] }]
+      filters: [
+        { name: '数据文件', extensions: ['csv', 'json', 'xlsx', 'xls'] },
+        { name: 'CSV 文件', extensions: ['csv'] },
+        { name: 'JSON 文件', extensions: ['json'] },
+        { name: 'Excel 工作簿', extensions: ['xlsx', 'xls'] }
+      ]
     })
     if (selected.canceled || !selected.filePaths[0]) return { success: false, message: '已取消导入' }
     const confirmation = await dialog.showMessageBox({
       type: 'warning',
-      title: '导入 CSV',
+      title: '导入数据',
       message: `确定要将“${basename(selected.filePaths[0])}”导入表“${tableName}”吗？`,
-      detail: 'CSV 第一行必须是字段名称，导入会向当前表新增数据。',
+      detail: 'CSV 第一行、Excel 首个工作表第一行或 JSON 对象键必须与表字段名称一致。导入会向当前表新增数据。',
       buttons: ['导入', '取消'],
       defaultId: 1,
       cancelId: 1
     })
     if (confirmation.response !== 0) return { success: false, message: '已取消导入' }
-    return connectionService.importTableCsv(connectionId, databaseName, tableName, selected.filePaths[0])
+    return connectionService.importTableData(connectionId, databaseName, tableName, selected.filePaths[0])
+  })
+  ipcMain.handle('tables:import-csv', async (_event, connectionId: number, databaseName: string, tableName: string) => {
+    const selected = await dialog.showOpenDialog({ title: `导入到 ${databaseName}.${tableName}`, properties: ['openFile'], filters: [{ name: '数据文件', extensions: ['csv', 'json', 'xlsx', 'xls'] }] })
+    if (selected.canceled || !selected.filePaths[0]) return { success: false, message: '已取消导入' }
+    return connectionService.importTableData(connectionId, databaseName, tableName, selected.filePaths[0])
   })
   ipcMain.handle('tables:export-csv', async (
     _event,

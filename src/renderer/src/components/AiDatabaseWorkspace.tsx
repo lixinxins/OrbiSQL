@@ -9,6 +9,7 @@ import SearchableSelect from './SearchableSelect'
 interface AiDatabaseWorkspaceProps {
   active: boolean
   connections: DatabaseConnection[]
+  onOpenQueryTab?: (connectionId: number | null, databaseName: string, sql: string) => void
 }
 
 interface UiMessage extends AiConversationMessage {
@@ -62,7 +63,7 @@ function ResultPreview({ result }: { result: QueryExecutionResult }) {
   </div>
 }
 
-function AiDatabaseWorkspace({ active, connections }: AiDatabaseWorkspaceProps) {
+function AiDatabaseWorkspace({ active, connections, onOpenQueryTab }: AiDatabaseWorkspaceProps) {
   const { confirm, confirmDialog } = useConfirmDialog()
   const [models, setModels] = useState<AiStoredModel[]>([])
   const [sessions, setSessions] = useState<AiChatSession[]>(loadSessions)
@@ -263,12 +264,39 @@ function AiDatabaseWorkspace({ active, connections }: AiDatabaseWorkspaceProps) 
           {messages.map((message) => <article className={`ai-message ${message.role}`} key={message.id}>
             <span className="ai-message-avatar">{message.role === 'user' ? <User /> : <Sparkle weight="fill" />}</span>
             <div className="ai-message-content"><p>{message.content}</p>
-              {message.response?.proposal && <div className={`ai-sql-proposal ${message.response.proposal.risk}`}><header><span><Code />SQL 提案</span><em>{message.response.proposal.risk === 'read' ? '只读' : message.response.proposal.risk === 'write' ? '写入' : '高风险'}</em></header><pre>{message.response.proposal.sql}</pre>{message.response.proposal.risk !== 'read' && !message.response.result && <button type="button" onClick={() => void executeProposal(message.id, message.response!)}><ShieldWarning />确认并执行</button>}</div>}
+              {message.response?.proposal && <div className={`ai-sql-proposal ${message.response.proposal.risk}`}>
+                <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span><Code />SQL 提案</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <em>{message.response.proposal.risk === 'read' ? '只读' : message.response.proposal.risk === 'write' ? '写入' : '高风险'}</em>
+                    <button type="button" className="action-btn" style={{ height: 22, fontSize: 10, padding: '0 6px', cursor: 'pointer' }} title="在 SQL 查询页中打开并执行" onClick={() => onOpenQueryTab?.(connectionId, databaseName, message.response!.proposal!.sql)}>
+                      在 SQL 查询页中运行
+                    </button>
+                  </div>
+                </header>
+                <pre>{message.response.proposal.sql}</pre>
+                {message.response.proposal.risk !== 'read' && !message.response.result && <button type="button" onClick={() => void executeProposal(message.id, message.response!)}><ShieldWarning />确认并执行</button>}
+              </div>}
               {message.response?.result && <ResultPreview result={message.response.result} />}
             </div>
           </article>)}
           {sending && <article className="ai-message assistant"><span className="ai-message-avatar"><Sparkle weight="fill" /></span><div className="ai-message-content ai-thinking"><i /><i /><i /><span>Agent 正在分析数据库结构…</span></div></article>}
           <div ref={messageEndRef} />
+        </div>
+
+        <div className="ai-quick-prompts" style={{ display: 'flex', gap: 6, padding: '0 16px 8px', overflowX: 'auto', scrollbarWidth: 'none' }}>
+          <button type="button" className="action-btn" style={{ height: 26, fontSize: 11, whiteSpace: 'nowrap' }} onClick={() => setPrompt('请分析当前选中的数据表结构，评估索引覆盖与改进建议')}>
+            ⚡ 索引与结构诊断
+          </button>
+          <button type="button" className="action-btn" style={{ height: 26, fontSize: 11, whiteSpace: 'nowrap' }} onClick={() => setPrompt('请编写一条包含 GROUP BY 和 COUNT 统计的分析 SQL')}>
+            📊 统计分析 SQL 编写
+          </button>
+          <button type="button" className="action-btn" style={{ height: 26, fontSize: 11, whiteSpace: 'nowrap' }} onClick={() => setPrompt('请帮我编写一条跨表 INNER JOIN 查询 SQL')}>
+            🔗 跨表 JOIN 查询
+          </button>
+          <button type="button" className="action-btn" style={{ height: 26, fontSize: 11, whiteSpace: 'nowrap' }} onClick={() => setPrompt('请为当前表推荐并生成一条高性能建表 DDL')}>
+            🛠️ 生成建表 DDL
+          </button>
         </div>
 
         <footer className="ai-composer">

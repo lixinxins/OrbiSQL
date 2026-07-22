@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AppPreferences,
   ConnectionActionResult,
+  ConnectionGroup,
+  ConnectionSecurityFileKind,
   CopyTableInput,
   CreateConnectionInput,
   CreateTableInput,
@@ -16,6 +18,7 @@ import type {
   SavedQuery,
   TableDefinitionResult,
   TableDataFilter,
+  TransferTableDataInput,
   UpdateConnectionInput,
   UpdateDatabaseInput,
   UpdateTableInput
@@ -25,7 +28,7 @@ import type { AiAgentRequest, AiAgentResponse, AiExecuteProposalRequest, AiModel
 export interface AppInfo {
   name: string
   version: string
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform | 'harmonyos'
 }
 
 contextBridge.exposeInMainWorld('omnidb', {
@@ -51,7 +54,12 @@ contextBridge.exposeInMainWorld('omnidb', {
   },
   connections: {
     list: (): Promise<DatabaseConnection[]> => ipcRenderer.invoke('connections:list'),
+    listGroups: (): Promise<ConnectionGroup[]> => ipcRenderer.invoke('connections:list-groups'),
+    createGroup: (name: string): Promise<ConnectionActionResult> => ipcRenderer.invoke('connections:create-group', name),
+    deleteGroup: (id: number): Promise<ConnectionActionResult> => ipcRenderer.invoke('connections:delete-group', id),
+    setGroup: (connectionId: number, groupId: number | null): Promise<ConnectionActionResult> => ipcRenderer.invoke('connections:set-group', connectionId, groupId),
     selectSqliteFile: (): Promise<string | null> => ipcRenderer.invoke('connections:select-sqlite-file'),
+    selectSecurityFile: (kind: ConnectionSecurityFileKind): Promise<string | null> => ipcRenderer.invoke('connections:select-security-file', kind),
     create: (input: CreateConnectionInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('connections:create', input),
     update: (input: UpdateConnectionInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('connections:update', input),
     test: (input: CreateConnectionInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('connections:test', input),
@@ -81,12 +89,18 @@ contextBridge.exposeInMainWorld('omnidb', {
     save: (input: SaveQueryInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('queries:save', input),
     deleteSaved: (id: number, connectionId: number, databaseName: string): Promise<ConnectionActionResult> =>
       ipcRenderer.invoke('queries:delete-saved', id, connectionId, databaseName),
-    execute: (connectionId: number, databaseName: string, sql: string): Promise<QueryExecutionResult> =>
-      ipcRenderer.invoke('queries:execute', connectionId, databaseName, sql),
+    execute: (connectionId: number, databaseName: string, sql: string, sessionId?: string): Promise<QueryExecutionResult> =>
+      ipcRenderer.invoke('queries:execute', connectionId, databaseName, sql, sessionId),
+    beginTransaction: (connectionId: number, databaseName: string, sessionId: string): Promise<ConnectionActionResult> =>
+      ipcRenderer.invoke('queries:transaction-begin', connectionId, databaseName, sessionId),
+    commitTransaction: (sessionId: string): Promise<ConnectionActionResult> => ipcRenderer.invoke('queries:transaction-commit', sessionId),
+    rollbackTransaction: (sessionId: string): Promise<ConnectionActionResult> => ipcRenderer.invoke('queries:transaction-rollback', sessionId),
     updateRow: (input: QueryUpdateRowInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('queries:update-row', input)
   },
   tables: {
     create: (input: CreateTableInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('tables:create', input),
+    importData: (connectionId: number, databaseName: string, tableName: string): Promise<ConnectionActionResult> =>
+      ipcRenderer.invoke('tables:import-data', connectionId, databaseName, tableName),
     importCsv: (connectionId: number, databaseName: string, tableName: string): Promise<ConnectionActionResult> =>
       ipcRenderer.invoke('tables:import-csv', connectionId, databaseName, tableName),
     exportCsv: (connectionId: number, databaseName: string, tableName: string): Promise<ConnectionActionResult> =>
@@ -96,6 +110,7 @@ contextBridge.exposeInMainWorld('omnidb', {
     truncate: (connectionId: number, databaseName: string, tableName: string): Promise<ConnectionActionResult> =>
       ipcRenderer.invoke('tables:truncate', connectionId, databaseName, tableName),
     copy: (input: CopyTableInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('tables:copy', input),
+    transferData: (input: TransferTableDataInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('tables:transfer-data', input),
     readData: (connectionId: number, databaseName: string, tableName: string, limit: number, offset: number, filter?: TableDataFilter): Promise<QueryExecutionResult> =>
       ipcRenderer.invoke('tables:read-data', connectionId, databaseName, tableName, limit, offset, filter),
     updateRow: (input: QueryUpdateRowInput): Promise<ConnectionActionResult> => ipcRenderer.invoke('queries:update-row', input),

@@ -12,6 +12,8 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "build": "yarn typecheck && electron-vite build",
+    "build:harmony:web": "vite build --config vite.harmony.config.ts",
+    "build:harmony": "yarn build:harmony:web",
     "dist": "yarn build && electron-builder",
     "dist:mac": "yarn build && electron-builder --mac",
     "dist:win": "yarn build && electron-builder --win",
@@ -21,7 +23,9 @@
     "csv-parse": "^7.0.1",
     "csv-stringify": "^6.8.1",
     "mysql2": "^3.23.0",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "ssh2": "^1.17.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@phosphor-icons/react": "^2.1.10",
@@ -29,6 +33,7 @@
     "@types/pg": "^8.20.0",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
+    "@types/ssh2": "^1.15.5",
     "@vitejs/plugin-react": "^5.0.2",
     "electron": "^38.0.0",
     "electron-builder": "^26.0.12",

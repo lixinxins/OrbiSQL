@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowLineLeft, ArrowLineRight, ArrowRight, ArrowsClockwise, CaretRight, Check, Copy, Funnel, GearSix, ListBullets, Minus, PencilSimple, Plus, Stop, Table as TableIcon, Trash, X } from '@phosphor-icons/react'
+import type { ReactNode } from 'react'
+import { ArrowLeft, ArrowLineLeft, ArrowLineRight, ArrowRight, ArrowsClockwise, CaretRight, Check, Copy, DownloadSimple, Funnel, GearSix, ListBullets, Minus, PencilSimple, Plus, Stop, Table as TableIcon, Trash, X } from '@phosphor-icons/react'
 import type { DatabaseConnection, DatabaseItem, QueryExecutionResult, TableDataFilter, TableDataFilterOperator, TableItem } from '../../../shared/connections'
 import { useConfirmDialog } from './ConfirmDialog'
 
@@ -30,6 +31,8 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   const [newRowDraft, setNewRowDraft] = useState<Record<string, unknown> | null>(null)
   const [viewMode, setViewMode] = useState<'grid' | 'record'>('grid')
   const [showPageSize, setShowPageSize] = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState<number>(0)
+  const [detailModal, setDetailModal] = useState<{ rowIndex: number; column: string; text: string } | null>(null)
   const loadRequestId = useRef(0)
 
   useEffect(() => {
@@ -53,7 +56,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     setNewRowDraft(null)
     setRowSaveError('')
     try {
-      const nextResult = await window.omnidb.tables.readData(
+      const res = await window.omnidb.tables.readData(
         connection.id,
         database.name,
         table.name,
@@ -61,26 +64,81 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
         page * pageSize,
         appliedFilter
       )
-      if (requestId === loadRequestId.current) setResult(nextResult)
+      if (requestId === loadRequestId.current) {
+        setResult(res)
+        setLoading(false)
+      }
     } catch (error) {
-      if (requestId === loadRequestId.current) setResult({
-        success: false,
-        message: error instanceof Error ? error.message : '数据加载失败，请重启应用后重试'
-      })
-    } finally {
-      if (requestId === loadRequestId.current) setLoading(false)
+      if (requestId === loadRequestId.current) {
+        setResult({ success: false, message: error instanceof Error ? error.message : '加载数据失败' })
+        setLoading(false)
+      }
     }
-  }, [appliedFilter, connection.id, database.name, page, pageSize, table.name])
+  }, [connection.id, database.name, table.name, page, pageSize, appliedFilter])
+
+  useEffect(() => {
+    if (autoRefresh <= 0 || !active) return
+    const timer = setInterval(() => {
+      void loadData()
+    }, autoRefresh * 1000)
+    return () => clearInterval(timer)
+  }, [active, autoRefresh, loadData])
 
   useEffect(() => {
     void loadData()
   }, [loadData])
 
-  const displayValue = (value: unknown): string => {
-    if (value === null) return 'NULL'
-    if (value instanceof Uint8Array) return `[二进制 ${value.byteLength} 字节]`
-    if (typeof value === 'object') return JSON.stringify(value)
-    return String(value)
+  const displayValue = (value: unknown): ReactNode => {
+    if (value === null) return <span className="cell-null">NULL</span>
+    if (value instanceof Uint8Array) return <span className="cell-badge binary">[BLOB {value.byteLength} B]</span>
+    if (Array.isArray(value)) {
+      const jsonStr = JSON.stringify(value)
+      return (
+        <span className="cell-pg-tag array" title={jsonStr}>
+          <span className="pg-badge">ARRAY</span>
+          {`[${value.map((v) => (typeof v === 'string' ? `'${v}'` : String(v))).join(', ')}]`}
+        </span>
+      )
+    }
+    if (typeof value === 'object') {
+      const jsonStr = JSON.stringify(value)
+      return (
+        <span className="cell-pg-tag json" title={jsonStr}>
+          <span className="pg-badge">JSONB</span>
+          {jsonStr.length > 35 ? `${jsonStr.slice(0, 35)}…` : jsonStr}
+        </span>
+      )
+    }
+
+    const str = String(value)
+    if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str)) {
+      return (
+        <span className="cell-pg-tag uuid" title={str}>
+          <span className="pg-badge">UUID</span>
+          <code style={{ fontFamily: 'monospace', fontSize: 11 }}>{str}</code>
+        </span>
+      )
+    }
+
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(\/\d{1,2})?$/.test(str)) {
+      return (
+        <span className="cell-pg-tag inet" title={str}>
+          <span className="pg-badge">INET</span>
+          {str}
+        </span>
+      )
+    }
+
+    if (/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(str)) {
+      return (
+        <span className="cell-pg-tag mac" title={str}>
+          <span className="pg-badge">MAC</span>
+          {str}
+        </span>
+      )
+    }
+
+    return str
   }
 
   const startEditingCell = (rowIndex: number, column: string): void => {
@@ -292,6 +350,50 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     setPage(Math.max(0, Math.ceil(total / pageSize) - 1))
   }
 
+  const duplicateRow = (rowIndex: number): void => {
+    if (!result?.rows?.[rowIndex] || !result.columns) return
+    const sourceRow = result.rows[rowIndex]
+    const draft: Record<string, unknown> = {}
+    for (const col of result.columns) {
+      const isPk = result.editable?.columns.find((c) => c.resultName === col)?.primaryKey
+      if (!isPk) draft[col] = sourceRow[col]
+    }
+    setNewRowDraft(draft)
+    setEditingCell(null)
+    setSelectedRowIndex(null)
+    setRowSaveError('')
+  }
+
+  const getCellValueString = (rowIndex: number, column: string): string => {
+    if (!result?.rows?.[rowIndex]) return ''
+    const val = result.rows[rowIndex][column]
+    if (val === null) return 'NULL'
+    if (val === undefined) return ''
+    if (typeof val === 'object') return JSON.stringify(val)
+    return String(val)
+  }
+
+  const exportGridData = (format: 'csv' | 'json'): void => {
+    if (!result?.rows || !result.columns) return
+    let content = ''
+    if (format === 'csv') {
+      content = [
+        result.columns.join(','),
+        ...result.rows.map((row) => result.columns!.map((c) => JSON.stringify(row[c] ?? '')).join(','))
+      ].join('\n')
+    } else {
+      content = JSON.stringify(result.rows, null, 2)
+    }
+
+    const blob = new Blob([content], { type: format === 'csv' ? 'text/csv' : 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${table.name}_data.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <section className={`table-data-workspace${active ? ' active' : ''}`}>
       <div className="table-data-toolbar">
@@ -299,6 +401,8 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
           <strong>{table.name}</strong><span>{connection.name} / {database.name}</span>
         </div>
         <button type="button" onClick={() => onDesignTable(connection, database, table)}><PencilSimple />设计字段</button>
+        <button type="button" disabled={!result?.rows?.length} onClick={() => exportGridData('csv')}><DownloadSimple />导出 CSV</button>
+        <button type="button" disabled={!result?.rows?.length} onClick={() => exportGridData('json')}><DownloadSimple />导出 JSON</button>
         <span className="table-data-toolbar-spacer" />
       </div>
       <div className="table-data-filter">
@@ -340,7 +444,19 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
       <div className="table-data-grid-wrap">
         {viewMode === 'grid' && result?.success && result.columns && (
           <table className="query-table table-data-grid">
-            <thead><tr>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+            <thead>
+              <tr>
+                {result.columns.map((column) => {
+                  const isPk = result.editable?.columns.find((item) => item.resultName === column)?.primaryKey
+                  return (
+                    <th key={column}>
+                      {isPk && <span title="主键 Primary Key" style={{ cursor: 'help' }}>🔑 </span>}
+                      {column}
+                    </th>
+                  )
+                })}
+              </tr>
+            </thead>
             <tbody>
             {newRowDraft && <tr className="new-data-row">
               {result.columns.map((column) => <td key={column} className="editing-cell">
@@ -373,7 +489,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
                   }}
                 >
                   {isEditing
-                    ? <span className="cell-editor table-data-cell-editor">
+                    ? <span className="cell-editor table-data-cell-editor" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                       <input
                         autoFocus
                         value={draftValue === null || draftValue === undefined ? '' : String(draftValue)}
@@ -383,6 +499,8 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
                           if (event.key === 'Escape') setEditingCell(null)
                         }}
                       />
+                      <button type="button" style={{ fontSize: 9, padding: '1px 4px', cursor: 'pointer' }} onClick={() => setDraftValue(null)}>NULL</button>
+                      <button type="button" style={{ fontSize: 9, padding: '1px 4px', cursor: 'pointer' }} onClick={() => setDraftValue('')}>EMPTY</button>
                     </span>
                     : displayValue(row[column])}
                 </td>
@@ -408,6 +526,12 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
           <button type="button" title="取消修改" disabled={!newRowDraft && !editingCell} onClick={cancelPendingChange}><X /></button>
           <button type="button" title="刷新数据" disabled={loading} onClick={() => void loadData()}><ArrowsClockwise /></button>
           <button type="button" title="停止加载" disabled={!loading} onClick={stopLoading}><Stop weight="fill" /></button>
+          <select value={autoRefresh} onChange={(e) => setAutoRefresh(Number(e.target.value))} style={{ height: 26, fontSize: 11, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'pointer' }} title="自动刷新数据">
+            <option value={0}>手动刷新</option>
+            <option value={5}>每 5 秒刷新</option>
+            <option value={10}>每 10 秒刷新</option>
+            <option value={30}>每 30 秒刷新</option>
+          </select>
         </div>
         <code className="table-data-current-sql" title={selectSql}>{selectSql}</code>
         <div className="table-data-bottom-pagination">
@@ -435,20 +559,71 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
           style={{ left: resultContextMenu.x, top: resultContextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
+          <button type="button" onClick={() => void copyText(getCellValueString(resultContextMenu.rowIndex, resultContextMenu.column), '单元格值已复制')}>
+            <Copy />复制单元格值
+          </button>
+          <button type="button" onClick={() => {
+            setDetailModal({
+              rowIndex: resultContextMenu.rowIndex,
+              column: resultContextMenu.column,
+              text: getCellValueString(resultContextMenu.rowIndex, resultContextMenu.column)
+            })
+            setResultContextMenu(null)
+          }}>
+            <PencilSimple />查看 / 编辑大文本与 JSON
+          </button>
+          <button type="button" onClick={() => duplicateRow(resultContextMenu.rowIndex)}>
+            <Copy />克隆 / 复制此行记录
+          </button>
           <button type="button" className="danger" disabled={!result.editable} onClick={() => void deleteRow(resultContextMenu.rowIndex)}>
             <Trash />删除记录
           </button>
+          <span className="context-menu-divider" />
           <button type="button" disabled={!resultContextMenu.column} onClick={() => void copyText(resultContextMenu.column, '字段名称已复制')}>
             <Copy />复制字段名称
           </button>
-          <span className="context-menu-divider" />
           <div className="context-submenu-host">
-            <button type="button" disabled={!result.editable}><Copy /><span className="context-menu-label">复制为</span><CaretRight className="context-submenu-caret" /></button>
+            <button type="button" disabled={!result.editable}><Copy /><span className="context-menu-label">复制 SQL 为</span><CaretRight className="context-submenu-caret" /></button>
             {result.editable && <div className={`connection-context-menu context-submenu${resultContextMenu.x > window.innerWidth - 390 ? ' left' : ''}`}>
-              <button type="button" onClick={() => void copyText(buildInsertSql(resultContextMenu.rowIndex), '新增语句已复制')}><Copy />复制为新增语句</button>
-              <button type="button" onClick={() => void copyText(buildUpdateSql(resultContextMenu.rowIndex), '修改语句已复制')}><Copy />复制为修改语句</button>
-              <button type="button" disabled={!resultContextMenu.column} onClick={() => void copyText(resultContextMenu.column, '字段名称已复制')}><Copy />复制字段名称</button>
+              <button type="button" onClick={() => void copyText(buildInsertSql(resultContextMenu.rowIndex), '新增语句已复制')}><Copy />复制为 INSERT 语句</button>
+              <button type="button" onClick={() => void copyText(buildUpdateSql(resultContextMenu.rowIndex), '修改语句已复制')}><Copy />复制为 UPDATE 语句</button>
             </div>}
+          </div>
+        </div>
+      )}
+      {detailModal && (
+        <div className="connection-dialog-backdrop ai-model-dialog-backdrop" onClick={() => setDetailModal(null)}>
+          <div className="table-info-dialog" onClick={(e) => e.stopPropagation()} style={{ width: 680 }}>
+            <header className="table-info-tabs" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px' }}>
+              <h3 style={{ margin: 0, fontSize: 14 }}>查看 / 编辑大文本与 JSON — 字段 [{detailModal.column}]</h3>
+              <button type="button" style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--muted)' }} onClick={() => setDetailModal(null)}><X /></button>
+            </header>
+            <div className="table-info-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 16 }}>
+              <textarea
+                rows={14}
+                style={{ width: '100%', fontFamily: 'monospace', padding: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text)', fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }}
+                value={detailModal.text}
+                onChange={(e) => setDetailModal({ ...detailModal, text: e.target.value })}
+                placeholder="请输入长文本或 JSON 内容..."
+              />
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button type="button" className="action-btn" onClick={() => {
+                  try {
+                    const formatted = JSON.stringify(JSON.parse(detailModal.text), null, 2)
+                    setDetailModal({ ...detailModal, text: formatted })
+                  } catch {
+                    window.alert('当前文本不是有效的 JSON 格式')
+                  }
+                }}>格式化 JSON</button>
+                <button type="button" className="action-btn" onClick={() => setDetailModal({ ...detailModal, text: '' })}>置为空字符串</button>
+                <button type="button" className="action-btn" onClick={() => void copyText(detailModal.text, '大文本已复制')}>复制文本</button>
+                <button type="button" className="action-btn primary" onClick={() => {
+                  startEditingCell(detailModal.rowIndex, detailModal.column)
+                  setDraftValue(detailModal.text)
+                  setDetailModal(null)
+                }}>填入单元格并保存</button>
+              </div>
+            </div>
           </div>
         </div>
       )}

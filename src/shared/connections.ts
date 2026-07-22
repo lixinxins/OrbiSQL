@@ -15,7 +15,7 @@ export type DatabaseEngine =
   | '人大金仓'
 
 export type AppLanguage = 'zh-CN' | 'en-US'
-export type AppTheme = 'classic' | 'slate' | 'violet'
+export type AppTheme = 'system' | 'light' | 'classic' | 'slate' | 'violet'
 
 export interface AppPreferences {
   language: AppLanguage
@@ -86,6 +86,19 @@ export interface QueryExecutionResult extends ConnectionActionResult {
   queryCount?: number
   errorCount?: number
   successCount?: number
+  statementResults?: QueryStatementResult[]
+  failedStatementIndex?: number
+}
+
+export interface QueryStatementResult {
+  index: number
+  sql: string
+  success: boolean
+  message: string
+  affectedRows?: number
+  columns?: string[]
+  rows?: Array<Record<string, unknown>>
+  durationMs: number
 }
 
 export interface QueryEditableColumn {
@@ -120,7 +133,18 @@ export interface CopyTableInput {
   databaseName: string
   sourceTableName: string
   targetTableName: string
+  targetDatabaseName?: string
   includeData: boolean
+}
+
+export interface TransferTableDataInput {
+  sourceConnectionId: number
+  sourceDatabaseName: string
+  sourceTableName: string
+  targetConnectionId: number
+  targetDatabaseName: string
+  targetTableName: string
+  clearTarget: boolean
 }
 
 export interface RenameTableInput {
@@ -182,6 +206,13 @@ export type MySQLColumnType =
   | 'JSON'
   | 'ENUM'
   | 'SET'
+  | 'UUID'
+  | 'JSONB'
+  | 'INET'
+  | 'CIDR'
+  | 'MACADDR'
+  | 'BYTEA'
+  | 'HSTORE'
 
 export interface TableColumnDefinition {
   name: string
@@ -195,6 +226,7 @@ export interface TableColumnDefinition {
   comment: string
   defaultValue?: string | null
   extra?: string
+  autoIncrement?: boolean
 }
 
 export interface TableIndexDefinition {
@@ -247,7 +279,32 @@ export interface DatabaseConnection {
   connected: boolean
   open: boolean
   error?: string
+  groupId?: number | null
+  groupName?: string
+  ssh?: SshConfig
+  ssl?: SslConfig
 }
+
+export interface SshConfig {
+  enabled: boolean
+  host: string
+  port: number
+  username: string
+  authType: 'password' | 'privateKey'
+  password?: string
+  privateKeyPath?: string
+  passphrase?: string
+}
+
+export interface SslConfig {
+  enabled: boolean
+  rejectUnauthorized: boolean
+  caPath?: string
+  certPath?: string
+  keyPath?: string
+}
+
+export type ConnectionSecurityFileKind = 'sshPrivateKey' | 'sslCa' | 'sslCert' | 'sslKey'
 
 export interface CreateConnectionInput {
   name: string
@@ -258,6 +315,16 @@ export interface CreateConnectionInput {
   password: string
   defaultDatabase: string
   savePassword: boolean
+  color?: string
+  groupId?: number | null
+  ssh?: SshConfig
+  ssl?: SslConfig
+}
+
+export interface ConnectionGroup {
+  id: number
+  name: string
+  connectionCount: number
 }
 
 export interface UpdateConnectionInput extends CreateConnectionInput {
