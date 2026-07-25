@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const harmonyOutDir = resolve(__dirname, 'harmony-client/entry/src/main/resources/rawfile/orbisql')
+const harmonyOutDir = resolve(__dirname, 'harmony-client/entry/src/main/resources/rawfile/quilldb')
 
 export default defineConfig({
   root: resolve(__dirname, 'src/renderer'),
@@ -11,7 +11,7 @@ export default defineConfig({
   plugins: [
     react(),
     {
-      name: 'orbisql-harmony-inline-bundle',
+      name: 'quilldb-harmony-inline-bundle',
       closeBundle() {
         const indexPath = resolve(harmonyOutDir, 'index.html')
         let html = readFileSync(indexPath, 'utf8')
@@ -40,7 +40,7 @@ export default defineConfig({
     }
   ],
   define: {
-    __ORBISQL_HARMONY__: 'true'
+    __QUILLDB_HARMONY__: 'true'
   },
   build: {
     outDir: harmonyOutDir,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Database, X } from '@phosphor-icons/react'
-import type { DatabaseCharset, DatabaseConnection, DatabaseItem } from '../../../shared/connections'
+import type { DatabaseCharset, DatabaseConnection, DatabaseItem } from '@/shared/connections'
 import SearchableSelect from './SearchableSelect'
 
 interface DatabaseDialogProps {
@@ -43,6 +43,14 @@ function DatabaseDialog({ connection, database, onClose, onSaved }: DatabaseDial
     })
     return () => { active = false }
   }, [connection.id, database?.charset, database?.collation])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
 
   const selectedCharset = charsets.find((item) => item.name === charset)
 

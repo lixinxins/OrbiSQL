@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle, Code, Database, GearSix, PaperPlaneTilt, Plus, Robot, ShieldWarning, Sparkle, Trash, User } from '@phosphor-icons/react'
-import type { AiAgentResponse, AiConversationMessage, AiSaveModelInput, AiStoredModel } from '../../../shared/ai-agent'
-import type { DatabaseConnection, QueryExecutionResult } from '../../../shared/connections'
+import type { AiAgentResponse, AiConversationMessage, AiSaveModelInput, AiStoredModel } from '@/shared/ai-agent'
+import type { DatabaseConnection, QueryExecutionResult } from '@/shared/connections'
 import AiModelSettingsDialog from './AiModelSettingsDialog'
 import { useConfirmDialog } from './ConfirmDialog'
 import SearchableSelect from './SearchableSelect'
+import { LS_KEYS } from '../utils/localStorage-keys'
 
 interface AiDatabaseWorkspaceProps {
   active: boolean
@@ -28,8 +29,8 @@ interface AiChatSession {
   updatedAt: number
 }
 
-const SESSION_STORAGE_KEY = 'orbisql.ai.sessions.v1'
-const ACTIVE_SESSION_KEY = 'orbisql.ai.active-session.v1'
+const SESSION_STORAGE_KEY = LS_KEYS.AI_SESSIONS
+const ACTIVE_SESSION_KEY = LS_KEYS.AI_ACTIVE_SESSION
 
 const loadSessions = (): AiChatSession[] => {
   try {
@@ -186,7 +187,7 @@ function AiDatabaseWorkspace({ active, connections, onOpenQueryTab }: AiDatabase
   }
 
   const executeProposal = async (messageId: string, response: AiAgentResponse): Promise<void> => {
-    if (!connectionId || !databaseName || !response.proposal) return
+    if (!connectionId || !databaseName || !('proposal' in response)) return
     const dangerous = response.proposal.risk === 'dangerous'
     const approved = await confirm({
       title: dangerous ? '确认执行高风险 SQL' : '确认修改数据库',
@@ -261,25 +262,28 @@ function AiDatabaseWorkspace({ active, connections, onOpenQueryTab }: AiDatabase
 
         <div className="ai-conversation">
           {!messages.length && <div className="ai-empty-state"><Robot weight="duotone" /><h2>用自然语言操作数据库</h2><p>{selectedModel ? `当前模型：${selectedModel.name} · ${selectedModel.model}` : '请先添加或选择一个模型'}</p><div><span><CheckCircle />查询语句自动执行</span><span><ShieldWarning />写入操作确认后执行</span><span><Database />自动读取当前库结构</span></div></div>}
-          {messages.map((message) => <article className={`ai-message ${message.role}`} key={message.id}>
+          {messages.map((message) => {
+            const resp = message.response
+            return <article className={`ai-message ${message.role}`} key={message.id}>
             <span className="ai-message-avatar">{message.role === 'user' ? <User /> : <Sparkle weight="fill" />}</span>
             <div className="ai-message-content"><p>{message.content}</p>
-              {message.response?.proposal && <div className={`ai-sql-proposal ${message.response.proposal.risk}`}>
+              {resp && 'proposal' in resp && <div className={`ai-sql-proposal ${resp.proposal.risk}`}>
                 <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span><Code />SQL 提案</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <em>{message.response.proposal.risk === 'read' ? '只读' : message.response.proposal.risk === 'write' ? '写入' : '高风险'}</em>
-                    <button type="button" className="action-btn" style={{ height: 22, fontSize: 10, padding: '0 6px', cursor: 'pointer' }} title="在 SQL 查询页中打开并执行" onClick={() => onOpenQueryTab?.(connectionId, databaseName, message.response!.proposal!.sql)}>
+                    <em>{resp.proposal.risk === 'read' ? '只读' : resp.proposal.risk === 'write' ? '写入' : '高风险'}</em>
+                    <button type="button" className="action-btn" style={{ height: 22, fontSize: 10, padding: '0 6px', cursor: 'pointer' }} title="在 SQL 查询页中打开并执行" onClick={() => onOpenQueryTab?.(connectionId, databaseName, resp.proposal.sql)}>
                       在 SQL 查询页中运行
                     </button>
                   </div>
                 </header>
-                <pre>{message.response.proposal.sql}</pre>
-                {message.response.proposal.risk !== 'read' && !message.response.result && <button type="button" onClick={() => void executeProposal(message.id, message.response!)}><ShieldWarning />确认并执行</button>}
+                <pre>{resp.proposal.sql}</pre>
+                {resp.proposal.risk !== 'read' && !('result' in resp) && <button type="button" onClick={() => void executeProposal(message.id, resp)}><ShieldWarning />确认并执行</button>}
               </div>}
-              {message.response?.result && <ResultPreview result={message.response.result} />}
+              {resp && 'result' in resp && <ResultPreview result={resp.result} />}
             </div>
-          </article>)}
+          </article>
+          })}
           {sending && <article className="ai-message assistant"><span className="ai-message-avatar"><Sparkle weight="fill" /></span><div className="ai-message-content ai-thinking"><i /><i /><i /><span>Agent 正在分析数据库结构…</span></div></article>}
           <div ref={messageEndRef} />
         </div>

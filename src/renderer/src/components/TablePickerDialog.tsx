@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { DownloadSimple, UploadSimple, X } from '@phosphor-icons/react'
-import type { DatabaseItem, TableItem } from '../../../shared/connections'
+import { DownloadSimple, Table, UploadSimple, X } from '@phosphor-icons/react'
+import type { DatabaseItem, TableItem } from '@/shared/connections'
 import SearchableSelect from './SearchableSelect'
 
 interface TablePickerDialogProps {
@@ -30,18 +30,32 @@ function TablePickerDialog({ database, mode, onClose, onConfirm }: TablePickerDi
             <span>数据表</span>
             <SearchableSelect
               value={tableName}
-              options={database.tables.map((table) => ({ value: table.name, label: table.name }))}
-              placeholder="搜索并选择数据表"
+              options={database.tables.map((table) => ({
+                value: table.name,
+                label: table.comment ? `${table.name} (${table.comment})` : table.name,
+                keywords: `${table.name} ${table.comment ?? ''}`
+              }))}
+              placeholder="搜索并选择数据表..."
               onChange={setTableName}
             />
           </label>
+          {selectedTable && (
+            <div className="table-picker-info-badge">
+              <Table weight="duotone" />
+              <span>
+                已选择：<strong>{selectedTable.name}</strong>
+                {selectedTable.comment && <small> · {selectedTable.comment}</small>}
+                <small> ({selectedTable.columns.length} 个字段)</small>
+              </span>
+            </div>
+          )}
           {!database.tables.length && <div className="form-feedback error">当前数据库没有可用的数据表</div>}
         </div>
         <div className="dialog-footer">
           <span className="dialog-footer-spacer" />
           <button type="button" className="cancel-button" onClick={onClose}>取消</button>
           <button type="button" className="save-button" disabled={!selectedTable} onClick={() => selectedTable && onConfirm(selectedTable)}>
-            {importing ? '选择 CSV 文件' : '选择保存位置'}
+            {importing ? '下一步：数据解析与预览' : '下一步：设置导出与预览'}
           </button>
         </div>
       </div>

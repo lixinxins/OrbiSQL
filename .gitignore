@@ -18,3 +18,11 @@ harmony-client/entry/src/main/resources/rawfile/migration/
 
 # 旧品牌阶段生成、且未被应用引用的设计稿
 resources/omnidb-*.png
+
+# 临时测试与开发工具目录
+.playwright-cli/
+.qoder/
+.qoderignore
+dist-check/
+desktop_ui_preview.html
+

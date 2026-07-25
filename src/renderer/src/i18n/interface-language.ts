@@ -1,4 +1,4 @@
-import type { AppLanguage } from '../../../shared/connections'
+import type { AppLanguage } from '@/shared/connections'
 
 interface RenderedText {
   source: string
@@ -11,7 +11,7 @@ let currentLanguage: AppLanguage = 'zh-CN'
 let observer: MutationObserver | null = null
 
 const english: Record<string, string> = {
-  '新建连接': 'New connection', '新建查询': 'New query', '工作台': 'Workbench', '开始使用 OrbiSQL': 'Get started with OrbiSQL',
+  '新建连接': 'New connection', '新建查询': 'New query', '工作台': 'Workbench', '开始使用 QuillDB': 'Get started with QuillDB',
   '关闭当前': 'Close current', '关闭其他': 'Close others', '关闭左侧': 'Close tabs to the left', '关闭右侧': 'Close tabs to the right',
   '正在加载连接列表': 'Loading connections',
   '从左侧选择一个数据库，或创建新连接来管理你的数据。': 'Select a database on the left, or create a connection to manage your data.',
@@ -38,7 +38,7 @@ const english: Record<string, string> = {
   '字段检查通过': 'Validation passed', '等待执行查询': 'Waiting to run query', '在此输入 SQL 语句…': 'Enter SQL here…',
   '已保存的查询': 'Saved queries', '当前数据库还没有保存的查询': 'No saved queries for this database',
   '保存查询语句': 'Save query', '查询名称': 'Query name', '同名查询再次保存时会更新原有内容。': 'Saving with the same name updates the existing query.',
-  '保存': 'Save', '保存中…': 'Saving…', '取消': 'Cancel', '完成': 'Done', '设置': 'Settings', 'OrbiSQL 应用偏好设置': 'OrbiSQL preferences',
+  '保存': 'Save', '保存中…': 'Saving…', '取消': 'Cancel', '完成': 'Done', '设置': 'Settings', 'QuillDB 应用偏好设置': 'QuillDB preferences',
   '界面语言': 'Interface language', '系统菜单与应用界面使用的语言': 'Language used by the app and native menus', '简体中文': 'Simplified Chinese',
   '外观主题': 'Appearance theme', '选择一套浅色主题，切换后立即生效': 'Choose a light theme; changes apply immediately',
   '经典蓝': 'Classic blue', '柔和灰': 'Soft slate', '紫罗兰': 'Violet', '关闭设置': 'Close settings',

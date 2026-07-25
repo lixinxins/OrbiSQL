@@ -1,8 +1,8 @@
 {
-  "name": "orbisql",
+  "name": "quilldb",
   "version": "0.1.0",
-  "description": "OrbiSQL - Cross-platform desktop database management tool",
-  "desktopName": "OrbiSQL",
+  "description": "QuillDB - Cross-platform desktop database management tool",
+  "desktopName": "QuillDB",
   "main": "./out/main/index.js",
   "author": "CodeAce",
   "license": "MIT",
@@ -20,15 +20,35 @@
     "dist:linux": "yarn build && electron-builder --linux"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.23.1",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
+    "@tanstack/react-virtual": "^3.14.8",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "codemirror": "^6.0.2",
     "csv-parse": "^7.0.1",
     "csv-stringify": "^6.8.1",
+    "duckdb": "^1.4.4",
+    "ioredis": "^5.11.1",
+    "mongodb": "^7.5.0",
+    "mssql": "^12.7.0",
     "mysql2": "^3.23.0",
     "pg": "^8.22.0",
+    "pg-cursor": "^2.21.0",
     "ssh2": "^1.17.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@phosphor-icons/react": "^2.1.10",
+    "@types/mssql": "^12.3.0",
     "@types/node": "^24.3.0",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.1.12",
@@ -45,11 +65,11 @@
     "vite": "^7.1.3"
   },
   "build": {
-    "appId": "com.orbisql.desktop",
-    "productName": "OrbiSQL",
+    "appId": "com.quilldb.desktop",
+    "productName": "QuillDB",
     "copyright": "Copyright © 2026 CodeAce",
-    "executableName": "OrbiSQL",
-    "artifactName": "OrbiSQL-${version}-${arch}.${ext}",
+    "executableName": "QuillDB",
+    "artifactName": "QuillDB-${version}-${arch}.${ext}",
     "asar": true,
     "directories": {
       "output": "release",
@@ -72,8 +92,8 @@
         "en"
       ],
       "extendInfo": {
-        "CFBundleName": "OrbiSQL",
-        "CFBundleDisplayName": "OrbiSQL"
+        "CFBundleName": "QuillDB",
+        "CFBundleDisplayName": "QuillDB"
       },
       "target": [
         "dmg",
@@ -106,15 +126,15 @@
       ]
     },
     "nsis": {
-      "artifactName": "OrbiSQL-Setup-${version}-${arch}.${ext}",
+      "artifactName": "QuillDB-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "OrbiSQL"
+      "shortcutName": "QuillDB"
     },
     "portable": {
-      "artifactName": "OrbiSQL-Portable-${version}-${arch}.${ext}"
+      "artifactName": "QuillDB-Portable-${version}-${arch}.${ext}"
     }
   },
   "packageManager": "yarn@1.22.22"

@@ -154,6 +154,13 @@ const sqlRisk = (sql: string): AiSqlRisk => {
   return 'write'
 }
 
+/** 判断 SQL 是否为纯信息型查询（可自动执行，无需用户确认） */
+const isInformationalQuery = (sql: string): boolean => {
+  const normalized = sql.replace(/^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*/g, '').trim().toUpperCase()
+  return /^(SHOW|DESCRIBE|DESC|EXPLAIN)\b/.test(normalized) ||
+    /^PRAGMA\s+[A-Z0-9_]+\s*(?:\([^)]*\))?\s*$/.test(normalized)
+}
+
 const validateSingleStatement = (sql: string): string => {
   const trimmed = stripCodeFence(sql).replace(/;\s*$/, '').trim()
   if (!trimmed) throw new Error('模型没有生成 SQL')
@@ -235,11 +242,11 @@ export class AiAgentService {
       if (typeof parsed.sql !== 'string' || !parsed.sql.trim()) return { success: true, message }
       const sql = validateSingleStatement(parsed.sql)
       const proposal: AiSqlProposal = { sql, risk: sqlRisk(sql), explanation: message }
-      if (proposal.risk !== 'read') {
-        return { success: true, message: '该操作会修改数据库，请确认 SQL 后再执行。', proposal }
+      if (!isInformationalQuery(sql)) {
+        return { success: true, message: '请确认 SQL 后再执行。', proposal }
       }
       const result = await this.connectionService.executeQuery(request.connectionId, request.databaseName, sql)
-      return { success: result.success, message: result.message, proposal, result }
+      return { success: true, message: result.message, proposal, result }
     } catch (error) {
       return { success: false, message: error instanceof Error ? error.message : 'AI Agent 执行失败' }
     }
@@ -248,10 +255,10 @@ export class AiAgentService {
   async executeProposal(request: AiExecuteProposalRequest): Promise<AiAgentResponse> {
     try {
       const sql = validateSingleStatement(request.sql)
-      if (sqlRisk(sql) !== 'read' && request.approved !== true) return { success: false, message: '该 SQL 需要用户确认后才能执行' }
+      if (!isInformationalQuery(sql) && request.approved !== true) return { success: false, message: '该 SQL 需要用户确认后才能执行' }
       const result: QueryExecutionResult = await this.connectionService.executeQuery(request.connectionId, request.databaseName, sql)
       return {
-        success: result.success,
+        success: true,
         message: result.message,
         proposal: { sql, risk: sqlRisk(sql), explanation: result.message },
         result

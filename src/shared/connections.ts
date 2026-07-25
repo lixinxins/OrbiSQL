@@ -14,6 +14,12 @@ export type DatabaseEngine =
   | '达梦'
   | '人大金仓'
 
+/** SSH 是连接协议而非数据库引擎，与 DatabaseEngine 分离以减少引擎判断分支的复杂度 */
+export type ConnectionProtocol = DatabaseEngine | 'SSH'
+
+/** 连接环境标识，用于语义化区分不同环境 */
+export type ConnectionEnvironment = 'production' | 'staging' | 'development'
+
 export type AppLanguage = 'zh-CN' | 'en-US'
 export type AppTheme = 'system' | 'light' | 'classic' | 'slate' | 'violet'
 
@@ -22,20 +28,45 @@ export interface AppPreferences {
   theme: AppTheme
 }
 
+export interface TableColumn {
+  name: string
+  type: string        // 数据库原始类型，如 'varchar', 'int', 'text'
+  nullable: boolean
+  isPrimaryKey: boolean
+  comment?: string
+}
+
 export interface TableItem {
   name: string
   comment?: string
-  columns: string[]
+  columns: TableColumn[]
   indexes: string[]
   foreignKeys: string[]
   checks: string[]
   triggers: string[]
+  policies?: string[]
+}
+
+export interface SchemaItem {
+  name: string
+  tables: TableItem[]
+  views: string[]
+  functions: string[]
+  procedures?: string[]
+  sequences?: string[]
+  materializedViews?: string[]
+  extensions?: string[]
+  types?: string[]
+  domains?: string[]
+  foreignTables?: string[]
+  triggers?: string[]
 }
 
 export interface DatabaseItem {
   name: string
   charset?: string
   collation?: string
+  schemas?: SchemaItem[]
   tables: TableItem[]
   views: string[]
   functions: string[]
@@ -44,6 +75,10 @@ export interface DatabaseItem {
   triggers: string[]
   materializedViews?: string[]
   sequences?: string[]
+  extensions?: string[]
+  types?: string[]
+  domains?: string[]
+  foreignTables?: string[]
   packages?: string[]
   synonyms?: string[]
   events?: string[]
@@ -88,6 +123,12 @@ export interface QueryExecutionResult extends ConnectionActionResult {
   successCount?: number
   statementResults?: QueryStatementResult[]
   failedStatementIndex?: number
+  /** 结果集是否被截断（超出单次返回上限） */
+  truncated?: boolean
+  /** 服务端游标 ID，用于 fetchMore 取后续数据 */
+  cursorId?: string
+  /** 结果集总行数（仅 SELECT 查询） */
+  totalRows?: number
 }
 
 export interface QueryStatementResult {
@@ -269,13 +310,14 @@ export interface TableDefinitionResult extends ConnectionActionResult {
 export interface DatabaseConnection {
   id: number
   name: string
-  engine: DatabaseEngine
+  engine: ConnectionProtocol
   host: string
   port: number
   username: string
   defaultDatabase: string
   databases: DatabaseItem[]
   color: string
+  environment: ConnectionEnvironment | null
   connected: boolean
   open: boolean
   error?: string
@@ -308,7 +350,7 @@ export type ConnectionSecurityFileKind = 'sshPrivateKey' | 'sslCa' | 'sslCert' |
 
 export interface CreateConnectionInput {
   name: string
-  engine: 'MySQL' | 'PostgreSQL' | 'SQLite'
+  engine: ConnectionProtocol
   host: string
   port: number
   username: string
@@ -316,6 +358,7 @@ export interface CreateConnectionInput {
   defaultDatabase: string
   savePassword: boolean
   color?: string
+  environment?: ConnectionEnvironment | null
   groupId?: number | null
   ssh?: SshConfig
   ssl?: SslConfig
@@ -324,6 +367,7 @@ export interface CreateConnectionInput {
 export interface ConnectionGroup {
   id: number
   name: string
+  category: 'database' | 'ssh'
   connectionCount: number
 }
 
@@ -334,6 +378,7 @@ export interface UpdateConnectionInput extends CreateConnectionInput {
 export interface ConnectionActionResult {
   success: boolean
   message: string
+  connectionId?: number
 }
 
 export interface SavedQuery {
@@ -352,3 +397,122 @@ export interface SaveQueryInput {
   name: string
   sql: string
 }
+
+export interface ExportSqlProgress {
+  current: number
+  total: number
+  tableName?: string
+  message: string
+}
+
+export interface ExportSqlResult extends ConnectionActionResult {
+  filePath?: string
+  sqlContent?: string
+  totalLength?: number
+  isTruncated?: boolean
+  canceled?: boolean
+}
+
+export interface TableColumnPreviewInfo {
+  name: string
+  type: string
+  comment?: string
+}
+
+export interface PreviewImportResult {
+  success: boolean
+  message?: string
+  canceled?: boolean
+  filePath?: string
+  fileName?: string
+  fileSize?: number
+  totalRows?: number
+  fileHeaders?: string[]
+  previewRows?: Array<Record<string, unknown>>
+  tableColumns?: TableColumnPreviewInfo[]
+  initialMapping?: Record<string, string>
+  connectionId?: number
+  databaseName?: string
+  tableName?: string
+}
+
+export interface ExecuteImportInput {
+  connectionId: number
+  databaseName: string
+  tableName: string
+  filePath: string
+  columnMapping: Record<string, string>
+  clearTarget?: boolean
+}
+
+export interface ExportTableCustomInput {
+  connectionId: number
+  databaseName: string
+  tableName: string
+  format: 'csv' | 'json' | 'xlsx'
+  selectedColumns?: string[]
+  includeHeader?: boolean
+  filePath?: string
+}
+
+export interface PreviewSqlFileResult {
+  success: boolean
+  message?: string
+  canceled?: boolean
+  connectionId?: number
+  connectionName?: string
+  databaseName?: string
+  filePath?: string
+  fileName?: string
+  fileSize?: number
+  totalLines?: number
+  statementCount?: number
+  sqlPreview?: string
+  isTruncated?: boolean
+}
+
+export interface ExecuteSqlFileInput {
+  connectionId: number
+  databaseName?: string
+  filePath: string
+  continueOnError?: boolean
+  inTransaction?: boolean
+}
+
+export interface PreviewExportSqlResult {
+  success: boolean
+  message?: string
+  connectionId?: number
+  databaseName?: string
+  tableName?: string
+  includeData?: boolean
+  sqlPreview?: string
+  tableCount?: number
+  tables?: Array<{ name: string; columnsCount?: number; comment?: string }>
+}
+
+
+export interface ProcessItem {
+  id: string | number
+  user?: string
+  host?: string
+  db?: string
+  command?: string
+  time?: number
+  state?: string
+  info?: string
+  raw?: Record<string, unknown>
+}
+
+export interface ProcessListResult {
+  success: boolean
+  message?: string
+  processes?: ProcessItem[]
+  rawSql?: string
+}
+
+export interface KillProcessResult {
+  success: boolean
+  message: string
+}
+

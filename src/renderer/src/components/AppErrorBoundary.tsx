@@ -11,7 +11,7 @@ export class AppErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error('[OrbiSQL Error]', error, info)
+    console.error('[QuillDB Error]', error, info)
   }
 
   render() {

@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowLeft, ArrowLineLeft, ArrowLineRight, ArrowRight, ArrowsClockwise, CaretRight, Check, Copy, DownloadSimple, Funnel, GearSix, ListBullets, Minus, PencilSimple, Plus, Stop, Table as TableIcon, Trash, X } from '@phosphor-icons/react'
-import type { DatabaseConnection, DatabaseItem, QueryExecutionResult, TableDataFilter, TableDataFilterOperator, TableItem } from '../../../shared/connections'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { ArrowLeft, ArrowLineLeft, ArrowLineRight, ArrowRight, ArrowsClockwise, ArrowsInLineHorizontal, Broom, CaretRight, Check, Code, Copy, DownloadSimple, FileCode, Funnel, GearSix, ListBullets, Minus, PencilSimple, Plus, Stop, Table as TableIcon, Trash, X } from '@phosphor-icons/react'
+import type { DatabaseConnection, DatabaseItem, QueryExecutionResult, TableDataFilter, TableDataFilterOperator, TableItem } from '@/shared/connections'
+import { useConnectionStore } from '../stores/useConnectionStore'
 import { useConfirmDialog } from './ConfirmDialog'
+import { useToast } from '../contexts/ToastContext'
 
 interface TableDataWorkspaceProps {
   active: boolean
@@ -14,6 +17,7 @@ interface TableDataWorkspaceProps {
 
 function TableDataWorkspace({ active, connection, database, table, onDesignTable }: TableDataWorkspaceProps) {
   const { confirm, confirmDialog } = useConfirmDialog()
+  const { showToast } = useToast()
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(100)
   const [result, setResult] = useState<QueryExecutionResult | null>(null)
@@ -22,7 +26,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   const [draftValue, setDraftValue] = useState<unknown>('')
   const [savingCell, setSavingCell] = useState(false)
   const [rowSaveError, setRowSaveError] = useState('')
-  const [filterColumn, setFilterColumn] = useState(table.columns[0] ?? '')
+  const [filterColumn, setFilterColumn] = useState(table.columns[0]?.name ?? '')
   const [filterOperator, setFilterOperator] = useState<TableDataFilterOperator>('contains')
   const [filterValue, setFilterValue] = useState('')
   const [appliedFilter, setAppliedFilter] = useState<TableDataFilter | undefined>()
@@ -34,6 +38,15 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   const [autoRefresh, setAutoRefresh] = useState<number>(0)
   const [detailModal, setDetailModal] = useState<{ rowIndex: number; column: string; text: string } | null>(null)
   const loadRequestId = useRef(0)
+
+  // P2: 数据网格虚拟化
+  const gridScrollRef = useRef<HTMLDivElement>(null)
+  const gridVirtualizer = useVirtualizer({
+    count: result?.rows?.length ?? 0,
+    getScrollElement: () => gridScrollRef.current,
+    estimateSize: () => 33,
+    overscan: 10
+  })
 
   useEffect(() => {
     if (!resultContextMenu) return
@@ -88,7 +101,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     void loadData()
   }, [loadData])
 
-  const displayValue = (value: unknown): ReactNode => {
+  const displayValue = useCallback((value: unknown): ReactNode => {
     if (value === null) return <span className="cell-null">NULL</span>
     if (value instanceof Uint8Array) return <span className="cell-badge binary">[BLOB {value.byteLength} B]</span>
     if (Array.isArray(value)) {
@@ -139,10 +152,20 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     }
 
     return str
-  }
+  }, [])
+
+  // P2: 可编辑字段缓存（避免每个单元格重复 .find 遍历）
+  const editableColumnMap = useMemo(() => {
+    const map = new Map<string, NonNullable<QueryExecutionResult['editable']>['columns'][number]>()
+    if (result?.editable) for (const col of result.editable.columns) map.set(col.resultName, col)
+    return map
+  }, [result?.editable])
+  const primaryKeyColumns = useMemo(() => result?.editable?.columns.filter((c) => c.primaryKey) ?? [], [result?.editable])
+  const nonPrimaryKeyColumns = useMemo(() => result?.editable?.columns.filter((c) => !c.primaryKey) ?? [], [result?.editable])
+  const editableColumnNames = useMemo(() => new Set(editableColumnMap.keys()), [editableColumnMap])
 
   const startEditingCell = (rowIndex: number, column: string): void => {
-    if (!result?.rows?.[rowIndex] || !result.editable?.columns.some((item) => item.resultName === column)) return
+    if (!result?.rows?.[rowIndex] || !editableColumnNames.has(column)) return
     setEditingCell({ rowIndex, column })
     setDraftValue(result.rows[rowIndex][column])
     setRowSaveError('')
@@ -151,16 +174,16 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   const saveEditingCell = async (): Promise<void> => {
     if (!editingCell || !result?.rows?.[editingCell.rowIndex] || !result.editable) return
     const originalRow = result.rows[editingCell.rowIndex]
-    const column = result.editable.columns.find((item) => item.resultName === editingCell.column)
+    const column = editableColumnMap.get(editingCell.column)
     if (!column) return
     if (draftValue === originalRow[editingCell.column]) {
       setEditingCell(null)
       return
     }
     const primaryKeyValues: Record<string, unknown> = {}
-    result.editable.columns.forEach((column) => {
-      if (column.primaryKey) primaryKeyValues[column.sourceName] = originalRow[column.resultName]
-    })
+    for (const col of primaryKeyColumns) {
+      primaryKeyValues[col.sourceName] = originalRow[col.resultName]
+    }
 
     setSavingCell(true)
     try {
@@ -202,9 +225,9 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     if (!confirmed) return
     const row = result.rows[rowIndex]
     const primaryKeyValues: Record<string, unknown> = {}
-    result.editable.columns.forEach((column) => {
-      if (column.primaryKey) primaryKeyValues[column.sourceName] = row[column.resultName]
-    })
+    for (const col of primaryKeyColumns) {
+      primaryKeyValues[col.sourceName] = row[col.resultName]
+    }
     setRowSaveError('')
     const deleted = await window.omnidb.tables.deleteRow({
       connectionId: connection.id,
@@ -259,13 +282,63 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   const buildUpdateSql = (rowIndex: number): string => {
     if (!result?.editable || !result.rows?.[rowIndex]) return ''
     const row = result.rows[rowIndex]
-    const changedColumns = result.editable.columns.filter((column) => !column.primaryKey)
-    const primaryKeys = result.editable.columns.filter((column) => column.primaryKey)
+    const changedColumns = nonPrimaryKeyColumns
+    const primaryKeys = primaryKeyColumns
     return `UPDATE ${sqlIdentifier(database.name)}.${sqlIdentifier(table.name)} SET ${changedColumns.map((column) => `${sqlIdentifier(column.sourceName)} = ${sqlValue(row[column.resultName])}`).join(', ')} WHERE ${primaryKeys.map((column) => `${sqlIdentifier(column.sourceName)} <=> ${sqlValue(row[column.resultName])}`).join(' AND ')};`
   }
 
   const rows = result?.rows ?? []
-  const availableColumns = table.columns.length ? table.columns : result?.columns ?? []
+
+  const [customColumnWidths, setCustomColumnWidths] = useState<Record<string, number>>({})
+  const resizerRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null)
+
+  // 计算各列最佳宽度以保证 100% 像素级对齐（支持用户手动拖动列宽）
+  const columnWidthMap = useMemo(() => {
+    const map = new Map<string, number>()
+    if (!result?.columns) return map
+    for (const col of result.columns) {
+      if (customColumnWidths[col] !== undefined) {
+        map.set(col, customColumnWidths[col])
+        continue
+      }
+      let maxLen = col.length
+      if (rows) {
+        const sampleCount = Math.min(rows.length, 50)
+        for (let i = 0; i < sampleCount; i++) {
+          const val = rows[i][col]
+          const strLen = val === null || val === undefined ? 4 : String(val).length
+          if (strLen > maxLen) maxLen = strLen
+        }
+      }
+      const calculatedWidth = Math.min(Math.max(maxLen * 9 + 32, 130), 400)
+      map.set(col, calculatedWidth)
+    }
+    return map
+  }, [result?.columns, rows, customColumnWidths])
+
+  const handleColumnResizeStart = (e: React.MouseEvent, column: string): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startWidth = columnWidthMap.get(column) ?? 150
+    resizerRef.current = { col: column, startX: e.clientX, startWidth }
+
+    const handleMouseMove = (moveEvent: MouseEvent): void => {
+      if (!resizerRef.current) return
+      const deltaX = moveEvent.clientX - resizerRef.current.startX
+      const newWidth = Math.max(resizerRef.current.startWidth + deltaX, 70)
+      setCustomColumnWidths((prev) => ({ ...prev, [resizerRef.current!.col]: newWidth }))
+    }
+
+    const handleMouseUp = (): void => {
+      resizerRef.current = null
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+  }
+  const availableColumns = table.columns.length ? table.columns.map((c) => c.name) : result?.columns ?? []
   const filterNeedsValue = !['isEmpty', 'isEmptyOrNull', 'isNotEmpty', 'isNull', 'isNotNull'].includes(filterOperator)
 
   const applyFilter = (): void => {
@@ -355,7 +428,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     const sourceRow = result.rows[rowIndex]
     const draft: Record<string, unknown> = {}
     for (const col of result.columns) {
-      const isPk = result.editable?.columns.find((c) => c.resultName === col)?.primaryKey
+      const isPk = editableColumnMap.get(col)?.primaryKey
       if (!isPk) draft[col] = sourceRow[col]
     }
     setNewRowDraft(draft)
@@ -401,6 +474,16 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
           <strong>{table.name}</strong><span>{connection.name} / {database.name}</span>
         </div>
         <button type="button" onClick={() => onDesignTable(connection, database, table)}><PencilSimple />设计字段</button>
+        <button
+          type="button"
+          onClick={() => {
+            void useConnectionStore.getState().actions.refreshTable(connection.id, database.name, table.name)
+            void loadData()
+          }}
+          title="刷新当前数据表"
+        >
+          <ArrowsClockwise />刷新表
+        </button>
         <button type="button" disabled={!result?.rows?.length} onClick={() => exportGridData('csv')}><DownloadSimple />导出 CSV</button>
         <button type="button" disabled={!result?.rows?.length} onClick={() => exportGridData('json')}><DownloadSimple />导出 JSON</button>
         <span className="table-data-toolbar-spacer" />
@@ -441,71 +524,89 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
       {(rowSaveError || result && !result.success) && <div className="query-message error">
         <span>{rowSaveError || result?.message}</span>
       </div>}
-      <div className="table-data-grid-wrap">
+      <div className="table-data-grid-wrap virtual-scroll" ref={gridScrollRef}>
         {viewMode === 'grid' && result?.success && result.columns && (
           <table className="query-table table-data-grid">
             <thead>
               <tr>
                 {result.columns.map((column) => {
-                  const isPk = result.editable?.columns.find((item) => item.resultName === column)?.primaryKey
+                  const isPk = editableColumnMap.get(column)?.primaryKey
+                  const width = columnWidthMap.get(column) ?? 150
                   return (
-                    <th key={column}>
+                    <th key={column} className="th-resizable" style={{ width: `${width}px`, minWidth: `${width}px` }}>
                       {isPk && <span title="主键 Primary Key" style={{ cursor: 'help' }}>🔑 </span>}
-                      {column}
+                      <span>{column}</span>
+                      <div
+                        className="th-resizer"
+                        title="拖动调整列宽"
+                        onMouseDown={(event) => handleColumnResizeStart(event, column)}
+                      />
                     </th>
                   )
                 })}
               </tr>
             </thead>
-            <tbody>
-            {newRowDraft && <tr className="new-data-row">
-              {result.columns.map((column) => <td key={column} className="editing-cell">
-                <input
-                  value={newRowDraft[column] === undefined || newRowDraft[column] === null ? '' : String(newRowDraft[column])}
-                  placeholder="默认值"
-                  onChange={(event) => setNewRowDraft((current) => current ? { ...current, [column]: event.target.value } : current)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') void saveNewRow()
-                    if (event.key === 'Escape') cancelPendingChange()
-                  }}
-                />
-              </td>)}
-            </tr>}
-            {rows.map((row, index) => <tr key={index} className={`${editingCell?.rowIndex === index ? 'editing ' : ''}${selectedRowIndex === index ? 'selected' : ''}`}>
-              {result.columns!.map((column) => {
-                const editableColumn = result.editable?.columns.find((item) => item.resultName === column)
-                const isEditing = editingCell?.rowIndex === index && editingCell.column === column
-                return <td
-                  key={column}
-                  className={`${editableColumn ? 'editable-cell' : ''}${isEditing ? ' editing-cell' : ''}`}
-                  onClick={() => {
-                    setSelectedRowIndex(index)
-                    if (editableColumn && !isEditing) startEditingCell(index, column)
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    setResultContextMenu({ x: Math.min(event.clientX, window.innerWidth - 196), y: Math.min(event.clientY, window.innerHeight - 190), rowIndex: index, column })
-                  }}
-                >
-                  {isEditing
-                    ? <span className="cell-editor table-data-cell-editor" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <input
-                        autoFocus
-                        value={draftValue === null || draftValue === undefined ? '' : String(draftValue)}
-                        onChange={(event) => setDraftValue(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') void saveEditingCell()
-                          if (event.key === 'Escape') setEditingCell(null)
-                        }}
-                      />
-                      <button type="button" style={{ fontSize: 9, padding: '1px 4px', cursor: 'pointer' }} onClick={() => setDraftValue(null)}>NULL</button>
-                      <button type="button" style={{ fontSize: 9, padding: '1px 4px', cursor: 'pointer' }} onClick={() => setDraftValue('')}>EMPTY</button>
-                    </span>
-                    : displayValue(row[column])}
+            <tbody className="virtual-tbody" style={{ height: `${gridVirtualizer.getTotalSize() + (newRowDraft ? 33 : 0)}px` }}>
+            {newRowDraft && <tr className="new-data-row" style={{ height: '33px', position: 'absolute', left: 0, right: 0, transform: 'translateY(0px)' }}>
+              {result.columns.map((column) => {
+                const width = columnWidthMap.get(column) ?? 150
+                return <td key={column} className="editing-cell" style={{ width: `${width}px`, minWidth: `${width}px` }}>
+                  <input
+                    value={newRowDraft[column] === undefined || newRowDraft[column] === null ? '' : String(newRowDraft[column])}
+                    placeholder="默认值"
+                    onChange={(event) => setNewRowDraft((current) => current ? { ...current, [column]: event.target.value } : current)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void saveNewRow()
+                      if (event.key === 'Escape') cancelPendingChange()
+                    }}
+                  />
                 </td>
               })}
-            </tr>)}
+            </tr>}
+            {gridVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = rows[virtualRow.index]
+              const offsetY = virtualRow.start + (newRowDraft ? 33 : 0)
+              return <tr key={virtualRow.index} className={`${editingCell?.rowIndex === virtualRow.index ? 'editing ' : ''}${selectedRowIndex === virtualRow.index ? 'selected' : ''}`} style={{ height: `${virtualRow.size}px`, transform: `translateY(${offsetY}px)` }}>
+                {result.columns!.map((column) => {
+                  const editableColumn = editableColumnMap.get(column)
+                  const isEditing = editingCell?.rowIndex === virtualRow.index && editingCell.column === column
+                  const width = columnWidthMap.get(column) ?? 150
+                  const cellWidth = isEditing ? Math.max(width, 310) : width
+                  return <td
+                    key={column}
+                    className={`${editableColumn ? 'editable-cell' : ''}${isEditing ? ' editing-cell' : ''}`}
+                    style={{ width: `${cellWidth}px`, minWidth: `${cellWidth}px` }}
+                    onClick={() => {
+                      setSelectedRowIndex(virtualRow.index)
+                      if (editableColumn && !isEditing) startEditingCell(virtualRow.index, column)
+                    }}
+                    onContextMenu={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setResultContextMenu({ x: Math.min(event.clientX, window.innerWidth - 196), y: Math.min(event.clientY, window.innerHeight - 190), rowIndex: virtualRow.index, column })
+                    }}
+                  >
+                    {isEditing
+                      ? <span className="cell-editor table-data-cell-editor" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          autoFocus
+                          value={draftValue === null || draftValue === undefined ? '' : String(draftValue)}
+                          onChange={(event) => setDraftValue(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') void saveEditingCell()
+                            if (event.key === 'Escape') setEditingCell(null)
+                          }}
+                        />
+                        <button type="button" className="editor-btn null-btn" title="设为 NULL" onClick={() => setDraftValue(null)}>NULL</button>
+                        <button type="button" className="editor-btn empty-btn" title="设为空字符串" onClick={() => setDraftValue('')}>EMPTY</button>
+                        <button type="button" className="editor-btn save-btn" title="保存 (Enter)" onClick={() => void saveEditingCell()}><Check weight="bold" />保存</button>
+                        <button type="button" className="editor-btn cancel-btn" title="取消 (Esc)" onClick={() => setEditingCell(null)}><X />取消</button>
+                      </span>
+                      : displayValue(row[column])}
+                  </td>
+                })}
+              </tr>
+            })}
             </tbody>
           </table>
         )}
@@ -592,38 +693,85 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
         </div>
       )}
       {detailModal && (
-        <div className="connection-dialog-backdrop ai-model-dialog-backdrop" onClick={() => setDetailModal(null)}>
-          <div className="table-info-dialog" onClick={(e) => e.stopPropagation()} style={{ width: 680 }}>
-            <header className="table-info-tabs" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px' }}>
-              <h3 style={{ margin: 0, fontSize: 14 }}>查看 / 编辑大文本与 JSON — 字段 [{detailModal.column}]</h3>
-              <button type="button" style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--muted)' }} onClick={() => setDetailModal(null)}><X /></button>
+        <div className="text-detail-backdrop" onClick={() => setDetailModal(null)}>
+          <div className="text-detail-dialog" onClick={(e) => e.stopPropagation()}>
+            <header className="text-detail-header">
+              <div className="text-detail-title-group">
+                <div className="text-detail-icon"><FileCode weight="duotone" /></div>
+                <div className="text-detail-title-info">
+                  <strong>
+                    查看 / 编辑大文本与 JSON
+                    <span className="text-detail-column-badge">{detailModal.column}</span>
+                  </strong>
+                  <small>{detailModal.text.length} 字符 · {detailModal.text.split('\n').length} 行</small>
+                </div>
+              </div>
+              <button type="button" className="text-detail-close-btn" onClick={() => setDetailModal(null)} title="关闭"><X /></button>
             </header>
-            <div className="table-info-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 16 }}>
+
+            <div className="text-detail-toolbar">
+              <button type="button" className="text-detail-tool-btn" title="格式化 JSON 字符串" onClick={() => {
+                try {
+                  const formatted = JSON.stringify(JSON.parse(detailModal.text), null, 2)
+                  setDetailModal({ ...detailModal, text: formatted })
+                  showToast('success', '已格式化为标准 JSON 格式')
+                } catch {
+                  showToast('error', '当前文本不是有效的 JSON 格式')
+                }
+              }}>
+                <Code />格式化 JSON
+              </button>
+              <button type="button" className="text-detail-tool-btn" title="压缩 JSON（去除换行与空格）" onClick={() => {
+                try {
+                  const minified = JSON.stringify(JSON.parse(detailModal.text))
+                  setDetailModal({ ...detailModal, text: minified })
+                  showToast('success', '已压缩 JSON 字符串')
+                } catch {
+                  showToast('error', '当前文本不是有效的 JSON 格式')
+                }
+              }}>
+                <ArrowsInLineHorizontal />压缩 JSON
+              </button>
+              <button type="button" className="text-detail-tool-btn" title="清空所有文本" onClick={() => setDetailModal({ ...detailModal, text: '' })}>
+                <Broom />清空文本
+              </button>
+              <button type="button" className="text-detail-tool-btn" title="复制文本到剪贴板" onClick={() => void copyText(detailModal.text, '文本内容已复制')}>
+                <Copy />复制内容
+              </button>
+            </div>
+
+            <div className="text-detail-editor-body">
               <textarea
-                rows={14}
-                style={{ width: '100%', fontFamily: 'monospace', padding: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text)', fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }}
+                className="text-detail-textarea"
                 value={detailModal.text}
                 onChange={(e) => setDetailModal({ ...detailModal, text: e.target.value })}
                 placeholder="请输入长文本或 JSON 内容..."
+                autoFocus
               />
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                <button type="button" className="action-btn" onClick={() => {
+            </div>
+
+            <footer className="text-detail-footer">
+              <div className="text-detail-footer-status">
+                {(() => {
+                  if (!detailModal.text.trim()) return <span>为空内容</span>
                   try {
-                    const formatted = JSON.stringify(JSON.parse(detailModal.text), null, 2)
-                    setDetailModal({ ...detailModal, text: formatted })
+                    JSON.parse(detailModal.text)
+                    return <span className="text-detail-status-pill valid">✓ 标准 JSON 格式</span>
                   } catch {
-                    window.alert('当前文本不是有效的 JSON 格式')
+                    return <span className="text-detail-status-pill invalid">纯文本 / 字符串</span>
                   }
-                }}>格式化 JSON</button>
-                <button type="button" className="action-btn" onClick={() => setDetailModal({ ...detailModal, text: '' })}>置为空字符串</button>
-                <button type="button" className="action-btn" onClick={() => void copyText(detailModal.text, '大文本已复制')}>复制文本</button>
-                <button type="button" className="action-btn primary" onClick={() => {
+                })()}
+              </div>
+
+              <div className="text-detail-footer-actions">
+                <button type="button" className="text-detail-cancel-btn" onClick={() => setDetailModal(null)}>取消</button>
+                <button type="button" className="text-detail-save-btn" onClick={() => {
                   startEditingCell(detailModal.rowIndex, detailModal.column)
                   setDraftValue(detailModal.text)
                   setDetailModal(null)
-                }}>填入单元格并保存</button>
+                }}><Check weight="bold" />填入单元格并保存</button>
               </div>
-            </div>
+            </footer>
           </div>
         </div>
       )}

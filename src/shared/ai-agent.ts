@@ -56,12 +56,11 @@ export interface AiSqlProposal {
   explanation: string
 }
 
-export interface AiAgentResponse {
-  success: boolean
-  message: string
-  proposal?: AiSqlProposal
-  result?: QueryExecutionResult
-}
+export type AiAgentResponse =
+  | { success: false; message: string }
+  | { success: true; message: string }
+  | { success: true; message: string; proposal: AiSqlProposal }
+  | { success: true; message: string; proposal: AiSqlProposal; result: QueryExecutionResult }
 
 export interface AiExecuteProposalRequest {
   connectionId: number

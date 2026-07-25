@@ -5,6 +5,7 @@ export interface DatabaseSslOptions {
   ca?: Buffer
   cert?: Buffer
   key?: Buffer
+  servername?: string
 }
 
 export interface SslConnectionConfig {
@@ -24,6 +25,7 @@ export const buildSslConfig = (connection: SslConnectionConfig): DatabaseSslOpti
     rejectUnauthorized: connection.sslRejectUnauthorized,
     ca: readOptionalFile(connection.sslCaPath),
     cert: readOptionalFile(connection.sslCertPath),
-    key: readOptionalFile(connection.sslKeyPath)
+    key: readOptionalFile(connection.sslKeyPath),
+    servername: connection.sslServerName?.trim() || undefined
   }
 }

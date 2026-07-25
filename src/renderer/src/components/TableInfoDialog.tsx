@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Check, Code, Copy, Info, Rows, Wrench, X } from '@phosphor-icons/react'
-import type { DatabaseConnection, DatabaseItem, TableItem } from '../../../shared/connections'
+import type { DatabaseConnection, DatabaseItem, TableItem } from '@/shared/connections'
 
 interface TableInfoDialogProps {
   connection: DatabaseConnection
@@ -93,7 +93,7 @@ function TableInfoDialog({ connection, database, table, onClose }: TableInfoDial
               updateTime: '-',
               collation: 'UTF-8',
               comment: table.comment || '暂无表注释',
-              ddl: `CREATE TABLE ${q(table.name)} (\n  ${(table.columns || []).map((c) => `${q(c)} TEXT`).join(',\n  ')}\n);`
+              ddl: `CREATE TABLE ${q(table.name)} (\n  ${(table.columns || []).map((c) => `${q(c.name)} ${(c.type || 'TEXT').toUpperCase()}`).join(',\n  ')}\n);`
             })
           }
         }
@@ -192,12 +192,12 @@ function TableInfoDialog({ connection, database, table, onClose }: TableInfoDial
                   </tr>
                 </thead>
                 <tbody>
-                  {(table.columns || []).map((column, idx) => (
-                    <tr key={column}>
-                      <td><strong>{column}</strong></td>
-                      <td><code>varchar/int</code></td>
-                      <td>{idx === 0 ? <span className="query-editable-badge">PRIMARY KEY</span> : 'Standard Column'}</td>
-                      <td className="empty">-</td>
+                  {(table.columns || []).map((column) => (
+                    <tr key={column.name}>
+                      <td><strong>{column.name}</strong></td>
+                      <td><code>{column.type ? column.type.toUpperCase() : 'TEXT'}</code></td>
+                      <td>{column.isPrimaryKey ? <span className="query-editable-badge">PRIMARY KEY</span> : 'Standard Column'}</td>
+                      <td className="empty">{column.comment || '-'}</td>
                     </tr>
                   ))}
                   {!table.columns?.length && (
@@ -223,7 +223,7 @@ function TableInfoDialog({ connection, database, table, onClose }: TableInfoDial
                     <tr key={idxName}>
                       <td><strong>{idxName}</strong></td>
                       <td>{idxName.toLowerCase().includes('primary') ? 'PRIMARY' : 'INDEX'}</td>
-                      <td><code>{table.columns?.[0] || 'id'}</code></td>
+                      <td><code>{table.columns?.[0]?.name || 'id'}</code></td>
                     </tr>
                   ))}
                   {!table.indexes?.length && (

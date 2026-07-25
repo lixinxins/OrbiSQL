@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { Check, GearSix, Sun, Translate, X } from '@phosphor-icons/react'
-import type { AppLanguage, AppTheme } from '../../../shared/connections'
+import { Check, GearSix, Translate, X } from '@phosphor-icons/react'
+import type { AppLanguage, AppTheme } from '@/shared/connections'
 
 interface SettingsDialogProps {
   language: AppLanguage
@@ -24,7 +24,7 @@ function SettingsDialog({ language, theme, onLanguageChange, onThemeChange, onCl
       <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <span><GearSix weight="fill" /></span>
-          <div><h2 id="settings-title">设置</h2><p>OrbiSQL 应用偏好设置</p></div>
+          <div><h2 id="settings-title">设置</h2><p>QuillDB 应用偏好设置</p></div>
           <button type="button" aria-label="关闭设置" onClick={onClose}><X /></button>
         </header>
         <div className="settings-content">
@@ -36,32 +36,28 @@ function SettingsDialog({ language, theme, onLanguageChange, onThemeChange, onCl
               <option value="en-US">English</option>
             </select>
           </div>
-          <div className="settings-row settings-theme-row">
-            <span className="settings-row-icon"><Sun /></span>
-            <div><strong>外观主题</strong><small>选择切换外观主题，设置后立即生效</small></div>
-            <div className="theme-card-grid" role="radiogroup" aria-label="外观主题">
+          <div className="">
+            <div className="theme-wrap-list" role="radiogroup" aria-label="外观主题">
               {([
-                { value: 'system', label: '跟随系统', colors: ['#6366f1', '#161b22'] },
-                { value: 'light', label: '明亮浅色', colors: ['#4f6df5', '#f6f8fb'] },
-                { value: 'classic', label: '经典蓝', colors: ['#6366f1', '#0d1117'] },
-                { value: 'slate', label: '柔和灰', colors: ['#64748b', '#111827'] },
-                { value: 'violet', label: '紫罗兰', colors: ['#8b5cf6', '#0f0a1c'] }
-              ] as Array<{ value: AppTheme; label: string; colors: [string, string] }>).map((option) => (
+                { value: 'system', label: '跟随系统', thumbClass: 'thumb-follow' },
+                { value: 'light', label: '明亮浅色', thumbClass: 'thumb-light' },
+                { value: 'classic', label: '经典蓝', thumbClass: 'thumb-blue' },
+                { value: 'slate', label: '柔和灰', thumbClass: 'thumb-gray' },
+                { value: 'violet', label: '紫罗兰', thumbClass: 'thumb-purple' }
+              ] as Array<{ value: AppTheme; label: string; thumbClass: string }>).map((option) => (
                 <button
                   type="button"
-                  className={`theme-card${theme === option.value ? ' selected' : ''}`}
+                  className={`theme-item${theme === option.value ? ' active' : ''}`}
                   role="radio"
                   aria-checked={theme === option.value}
                   key={option.value}
                   onClick={() => onThemeChange(option.value)}
                 >
-                  <span className="theme-card-preview" style={{ background: option.colors[1] }}>
-                    <i style={{ background: option.colors[0] }} />
-                    <i style={{ background: option.colors[0] }} />
-                    <i style={{ background: option.colors[1] === '#f6f8fb' ? '#ffffff' : '#21262d' }} />
-                  </span>
-                  <span className="theme-card-name">{option.label}</span>
-                  <span className="theme-card-check"><Check weight="bold" /></span>
+                  <div className={`theme-thumb ${option.thumbClass}`} />
+                  <span className="theme-name">{option.label}</span>
+                  {theme === option.value && (
+                    <div className="check-circle"><Check weight="bold" /></div>
+                  )}
                 </button>
               ))}
             </div>

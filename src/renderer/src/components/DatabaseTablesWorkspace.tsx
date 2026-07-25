@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
+  ArrowsClockwise,
   Broom,
   CaretDown,
   CaretRight,
@@ -20,7 +21,9 @@ import {
   UploadSimple,
   Wrench
 } from '@phosphor-icons/react'
-import type { DatabaseConnection, DatabaseItem, TableItem } from '../../../shared/connections'
+import type { DatabaseConnection, DatabaseItem, TableItem } from '@/shared/connections'
+import { useConnectionStore } from '../stores/useConnectionStore'
+import { useConfirmDialog } from './ConfirmDialog'
 
 interface DatabaseTablesWorkspaceProps {
   active: boolean
@@ -72,6 +75,7 @@ function DatabaseTablesWorkspace({
   onCopySqlStatement,
   onExportDataDictionary
 }: DatabaseTablesWorkspaceProps) {
+  const { confirm, confirmDialog } = useConfirmDialog()
   const [search, setSearch] = useState('')
   const [selectedTables, setSelectedTables] = useState<string[]>([])
   const [sortField, setSortField] = useState<SortField>('name')
@@ -184,9 +188,15 @@ function DatabaseTablesWorkspace({
     )
   }
 
-  const handleBatchTruncate = (): void => {
+  const handleBatchTruncate = async (): Promise<void> => {
     if (!selectedTables.length) return
-    if (window.confirm(`确定要批量清空选中的 ${selectedTables.length} 张数据表吗？`)) {
+    const confirmed = await confirm({
+      title: '批量清空数据表',
+      message: `确定要批量清空选中的 ${selectedTables.length} 张数据表吗？`,
+      detail: '表结构会保留，但表中的全部记录都会被永久删除。',
+      confirmLabel: '确认清空'
+    })
+    if (confirmed) {
       selectedTables.forEach((name) => {
         const table = database.tables.find((t) => t.name === name)
         if (table) onTruncateTable(connection, database, table)
@@ -195,9 +205,15 @@ function DatabaseTablesWorkspace({
     }
   }
 
-  const handleBatchDelete = (): void => {
+  const handleBatchDelete = async (): Promise<void> => {
     if (!selectedTables.length) return
-    if (window.confirm(`确定要批量删除选中的 ${selectedTables.length} 张数据表吗？此操作无法撤销！`)) {
+    const confirmed = await confirm({
+      title: '批量删除数据表',
+      message: `确定要批量删除选中的 ${selectedTables.length} 张数据表吗？`,
+      detail: '此操作无法撤销，表结构和数据都会被永久删除。',
+      confirmLabel: '批量删除'
+    })
+    if (confirmed) {
       selectedTables.forEach((name) => {
         const table = database.tables.find((t) => t.name === name)
         if (table) onDeleteTable(connection, database, table)
@@ -212,6 +228,7 @@ function DatabaseTablesWorkspace({
   }
 
   return (
+  <>
     <section className={`database-tables-workspace${active ? ' active' : ''}`}>
       <header className="database-tables-header">
         <div className="database-tables-title">
@@ -219,9 +236,9 @@ function DatabaseTablesWorkspace({
           <div>
             <h2>
               {database.name}
-              {connection.color === '#ef4444' && <span className="connection-env-badge prod">PROD</span>}
-              {connection.color === '#f59e0b' && <span className="connection-env-badge test">TEST</span>}
-              {connection.color === '#10b981' && <span className="connection-env-badge dev">DEV</span>}
+              {connection.environment === 'production' && <span className="connection-env-badge prod">PROD</span>}
+              {connection.environment === 'staging' && <span className="connection-env-badge test">TEST</span>}
+              {connection.environment === 'development' && <span className="connection-env-badge dev">DEV</span>}
             </h2>
             <p>{connection.name} · {connection.engine} · 共 {database.tables.length} 张表</p>
           </div>
@@ -239,6 +256,14 @@ function DatabaseTablesWorkspace({
           </button>
           <button type="button" className="action-btn" onClick={() => onExportDataDictionary?.(connection, database)}>
             <FileCode />数据字典
+          </button>
+          <button
+            type="button"
+            className="action-btn"
+            onClick={() => void useConnectionStore.getState().actions.refreshDatabase(connection.id, database.name)}
+            title="刷新当前数据库"
+          >
+            <ArrowsClockwise />刷新
           </button>
 
           {selectedTables.length > 0 && (
@@ -323,9 +348,11 @@ function DatabaseTablesWorkspace({
                       onChange={() => toggleSelectTable(table.name)}
                     />
                   </td>
-                  <td className="table-name-cell" onClick={() => onOpenTable(connection, database, table)}>
-                    <Rows className="table-icon" />
-                    <span className="table-name-text">{table.name}</span>
+                  <td onClick={() => onOpenTable(connection, database, table)}>
+                    <div className="table-name-cell">
+                      <Rows className="table-icon" />
+                      <span className="table-name-text">{table.name}</span>
+                    </div>
                   </td>
                   <td className="table-comment-cell">
                     {table.comment ? (
@@ -457,6 +484,8 @@ function DatabaseTablesWorkspace({
         </div>
       )}
     </section>
+    {confirmDialog}
+  </>
   )
 }
 

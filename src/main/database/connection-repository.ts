@@ -1,6 +1,6 @@
 import { safeStorage } from 'electron'
 import type { AiProviderType, AiSaveModelInput, AiStoredModel } from '../../shared/ai-agent'
-import type { ConnectionGroup, CreateConnectionInput, SaveQueryInput, SavedQuery, UpdateConnectionInput } from '../../shared/connections'
+import type { ConnectionEnvironment, ConnectionGroup, CreateConnectionInput, SaveQueryInput, SavedQuery, UpdateConnectionInput } from '../../shared/connections'
 import { sshTunnelManager } from '../services/ssh-tunnel-manager'
 import { DatabaseSync, type SqliteDatabase } from '../services/sqlite-runtime'
 
@@ -16,6 +16,7 @@ export interface StoredConnection {
   savePassword: boolean
   open: boolean
   color?: string
+  environment: ConnectionEnvironment | null
   groupId: number | null
   groupName: string
   sshEnabled: boolean
@@ -31,6 +32,7 @@ export interface StoredConnection {
   sslCaPath: string
   sslCertPath: string
   sslKeyPath: string
+  sortOrder: number
 }
 
 interface ConnectionRow {
@@ -45,7 +47,9 @@ interface ConnectionRow {
   save_password: number
   is_open: number
   color: string | null
+  environment: string | null
   group_id: number | null
+  sort_order: number | null
   group_name: string | null
   ssh_enabled: number
   ssh_host: string
@@ -87,25 +91,130 @@ export interface StoredAiModel extends AiStoredModel {
   apiKey: string
 }
 
+const CURRENT_SCHEMA_VERSION = 9
+
 export class ConnectionRepository {
   private readonly database: SqliteDatabase
 
   constructor(databasePath: string) {
     this.database = new DatabaseSync(databasePath)
-    this.database.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA foreign_keys = ON;
+    this.database.exec('PRAGMA journal_mode = WAL;')
+    this.database.exec('PRAGMA foreign_keys = ON;')
 
+    // schema_version 表与基础表（始终在事务外创建，IF NOT EXISTS 保证幂等）
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS schema_version (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 0);
+    `)
+    this.database.exec(`
       CREATE TABLE IF NOT EXISTS connection_groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
+        category TEXT NOT NULL DEFAULT 'database',
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-
       CREATE TABLE IF NOT EXISTS saved_connections (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        engine TEXT NOT NULL CHECK (engine IN ('MySQL', 'PostgreSQL', 'SQLite')),
+        engine TEXT NOT NULL,
+        host TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        username TEXT NOT NULL,
+        database_name TEXT NOT NULL DEFAULT '',
+        password_cipher BLOB,
+        save_password INTEGER NOT NULL DEFAULT 0,
+        is_open INTEGER NOT NULL DEFAULT 0,
+        color TEXT NOT NULL DEFAULT '',
+        group_id INTEGER REFERENCES connection_groups(id) ON DELETE SET NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        ssh_enabled INTEGER NOT NULL DEFAULT 0,
+        ssh_host TEXT NOT NULL DEFAULT '',
+        ssh_port INTEGER NOT NULL DEFAULT 22,
+        ssh_username TEXT NOT NULL DEFAULT '',
+        ssh_auth_type TEXT NOT NULL DEFAULT 'password',
+        ssh_password_cipher BLOB,
+        ssh_private_key_path TEXT NOT NULL DEFAULT '',
+        ssh_passphrase_cipher BLOB,
+        ssl_enabled INTEGER NOT NULL DEFAULT 0,
+        ssl_reject_unauthorized INTEGER NOT NULL DEFAULT 1,
+        ssl_ca_path TEXT NOT NULL DEFAULT '',
+        ssl_cert_path TEXT NOT NULL DEFAULT '',
+        ssl_key_path TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS saved_connections_unique_name
+        ON saved_connections(name);
+    `)
+
+    // 版本化迁移：事务包裹，崩溃安全
+    const version = this.getSchemaVersion()
+    if (version < CURRENT_SCHEMA_VERSION) {
+      this.database.exec('BEGIN TRANSACTION')
+      try {
+        if (version < 2) this.migrateToV2()
+        if (version < 3) this.migrateToV3()
+        if (version < 4) this.migrateToV4()
+        if (version < 5) this.migrateToV5()
+        if (version < 6) this.migrateToV6()
+        if (version < 7) this.migrateToV7()
+        if (version < 8) this.migrateToV8()
+        if (version < 9) this.migrateToV9()
+        this.setSchemaVersion(CURRENT_SCHEMA_VERSION)
+        this.database.exec('COMMIT')
+      } catch (e) {
+        this.database.exec('ROLLBACK')
+        throw e
+      }
+    }
+
+    // 每次启动重置连接状态
+    this.database.exec('UPDATE saved_connections SET is_open = 0;')
+  }
+
+  // ── Schema version helpers ──────────────────────────────────────────
+
+  private getSchemaVersion(): number {
+    const row = this.database.prepare('SELECT version FROM schema_version WHERE id = 1').get() as { version: number } | undefined
+    return row?.version ?? 0
+  }
+
+  private setSchemaVersion(version: number): void {
+    this.database.prepare('UPDATE schema_version SET version = ? WHERE id = 1').run(version)
+  }
+
+  // ── Migration steps ─────────────────────────────────────────────────
+
+  /** V2: 添加 is_open、database_name、color 字段 */
+  private migrateToV2(): void {
+    const columns = this.getTableColumns('saved_connections')
+    if (!columns.has('is_open')) {
+      this.database.exec('ALTER TABLE saved_connections ADD COLUMN is_open INTEGER NOT NULL DEFAULT 1')
+    }
+    if (!columns.has('database_name')) {
+      this.database.exec("ALTER TABLE saved_connections ADD COLUMN database_name TEXT NOT NULL DEFAULT ''")
+    }
+    if (!columns.has('color')) {
+      this.database.exec("ALTER TABLE saved_connections ADD COLUMN color TEXT NOT NULL DEFAULT ''")
+    }
+  }
+
+  /** V3: 移除 saved_connections 引擎 CHECK 约束（重建表） */
+  private migrateToV3(): void {
+    const schema = this.database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'saved_connections'").get() as { sql?: string } | undefined
+    if (!schema?.sql?.includes('CHECK (engine IN')) return
+
+    this.database.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP INDEX IF EXISTS saved_connections_unique_name;
+      ALTER TABLE saved_connections RENAME TO saved_connections_legacy_check;
+      CREATE TABLE saved_connections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        engine TEXT NOT NULL,
         host TEXT NOT NULL,
         port INTEGER NOT NULL,
         username TEXT NOT NULL,
@@ -131,71 +240,21 @@ export class ConnectionRepository {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-
-      CREATE UNIQUE INDEX IF NOT EXISTS saved_connections_unique_name
-        ON saved_connections(name);
-
+      INSERT INTO saved_connections
+        (id, name, engine, host, port, username, database_name, password_cipher, save_password, is_open, color, group_id, ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_password_cipher, ssh_private_key_path, ssh_passphrase_cipher, ssl_enabled, ssl_reject_unauthorized, ssl_ca_path, ssl_cert_path, ssl_key_path, created_at, updated_at)
+      SELECT id, name, engine, host, port, username, database_name, password_cipher, save_password, is_open, color, group_id, ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_password_cipher, ssh_private_key_path, ssh_passphrase_cipher, ssl_enabled, ssl_reject_unauthorized, ssl_ca_path, ssl_cert_path, ssl_key_path, created_at, updated_at
+      FROM saved_connections_legacy_check;
+      DROP TABLE saved_connections_legacy_check;
+      CREATE UNIQUE INDEX saved_connections_unique_name ON saved_connections(name);
+      PRAGMA foreign_keys = ON;
     `)
+  }
 
-    const columns = this.database.prepare('PRAGMA table_info(saved_connections)').all() as unknown as Array<{ name: string }>
-    if (!columns.some((column) => column.name === 'is_open')) {
-      this.database.exec('ALTER TABLE saved_connections ADD COLUMN is_open INTEGER NOT NULL DEFAULT 1')
-    }
-    if (!columns.some((column) => column.name === 'database_name')) {
-      this.database.exec("ALTER TABLE saved_connections ADD COLUMN database_name TEXT NOT NULL DEFAULT ''")
-    }
-    if (!columns.some((column) => column.name === 'color')) {
-      try {
-        this.database.exec("ALTER TABLE saved_connections ADD COLUMN color TEXT NOT NULL DEFAULT ''")
-      } catch {
-        // column might already exist
-      }
-    }
-    const schema = this.database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'saved_connections'").get() as { sql?: string } | undefined
-    if (schema?.sql?.includes("engine IN ('MySQL')")) {
-      this.database.exec(`
-        DROP INDEX IF EXISTS saved_connections_unique_name;
-        ALTER TABLE saved_connections RENAME TO saved_connections_legacy;
-        CREATE TABLE saved_connections (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          engine TEXT NOT NULL CHECK (engine IN ('MySQL', 'PostgreSQL', 'SQLite')),
-          host TEXT NOT NULL,
-          port INTEGER NOT NULL,
-          username TEXT NOT NULL,
-          database_name TEXT NOT NULL DEFAULT '',
-          password_cipher BLOB,
-          save_password INTEGER NOT NULL DEFAULT 0,
-          is_open INTEGER NOT NULL DEFAULT 1,
-          color TEXT NOT NULL DEFAULT '',
-          group_id INTEGER REFERENCES connection_groups(id) ON DELETE SET NULL,
-          ssh_enabled INTEGER NOT NULL DEFAULT 0,
-          ssh_host TEXT NOT NULL DEFAULT '',
-          ssh_port INTEGER NOT NULL DEFAULT 22,
-          ssh_username TEXT NOT NULL DEFAULT '',
-          ssh_auth_type TEXT NOT NULL DEFAULT 'password',
-          ssh_password_cipher BLOB,
-          ssh_private_key_path TEXT NOT NULL DEFAULT '',
-          ssh_passphrase_cipher BLOB,
-          ssl_enabled INTEGER NOT NULL DEFAULT 0,
-          ssl_reject_unauthorized INTEGER NOT NULL DEFAULT 1,
-          ssl_ca_path TEXT NOT NULL DEFAULT '',
-          ssl_cert_path TEXT NOT NULL DEFAULT '',
-          ssl_key_path TEXT NOT NULL DEFAULT '',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        INSERT INTO saved_connections
-          (id, name, engine, host, port, username, database_name, password_cipher, save_password, is_open, color, created_at, updated_at)
-        SELECT id, name, engine, host, port, username, database_name, password_cipher, save_password, is_open, '', created_at, updated_at
-        FROM saved_connections_legacy;
-        DROP TABLE saved_connections_legacy;
-        CREATE UNIQUE INDEX saved_connections_unique_name ON saved_connections(name);
-      `)
-    }
-    const currentColumns = this.database.prepare('PRAGMA table_info(saved_connections)').all() as unknown as Array<{ name: string }>
+  /** V4: 添加 SSH 相关字段 */
+  private migrateToV4(): void {
+    const columns = this.getTableColumns('saved_connections')
     const addColumn = (name: string, definition: string): void => {
-      if (!currentColumns.some((column) => column.name === name)) {
+      if (!columns.has(name)) {
         this.database.exec(`ALTER TABLE saved_connections ADD COLUMN ${name} ${definition}`)
       }
     }
@@ -208,11 +267,25 @@ export class ConnectionRepository {
     addColumn('ssh_password_cipher', 'BLOB')
     addColumn('ssh_private_key_path', "TEXT NOT NULL DEFAULT ''")
     addColumn('ssh_passphrase_cipher', 'BLOB')
+  }
+
+  /** V5: 添加 SSL 相关字段 */
+  private migrateToV5(): void {
+    const columns = this.getTableColumns('saved_connections')
+    const addColumn = (name: string, definition: string): void => {
+      if (!columns.has(name)) {
+        this.database.exec(`ALTER TABLE saved_connections ADD COLUMN ${name} ${definition}`)
+      }
+    }
     addColumn('ssl_enabled', 'INTEGER NOT NULL DEFAULT 0')
     addColumn('ssl_reject_unauthorized', 'INTEGER NOT NULL DEFAULT 1')
     addColumn('ssl_ca_path', "TEXT NOT NULL DEFAULT ''")
     addColumn('ssl_cert_path', "TEXT NOT NULL DEFAULT ''")
     addColumn('ssl_key_path', "TEXT NOT NULL DEFAULT ''")
+  }
+
+  /** V6: 创建 saved_queries、ai_models 表并初始化默认模型 */
+  private migrateToV6(): void {
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS saved_queries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -246,15 +319,46 @@ export class ConnectionRepository {
     }
   }
 
+  /** V7: 添加 environment 字段 */
+  private migrateToV7(): void {
+    const columns = this.getTableColumns('saved_connections')
+    if (!columns.has('environment')) {
+      this.database.exec("ALTER TABLE saved_connections ADD COLUMN environment TEXT NOT NULL DEFAULT ''")
+    }
+  }
+
+  /** V8: connection_groups 添加 category 字段 */
+  private migrateToV8(): void {
+    const columns = this.getTableColumns('connection_groups')
+    if (!columns.has('category')) {
+      this.database.exec("ALTER TABLE connection_groups ADD COLUMN category TEXT NOT NULL DEFAULT 'database'")
+    }
+  }
+
+  /** V9: saved_connections 添加 sort_order 字段 */
+  private migrateToV9(): void {
+    const columns = this.getTableColumns('saved_connections')
+    if (!columns.has('sort_order')) {
+      this.database.exec('ALTER TABLE saved_connections ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
+    }
+  }
+
+  // ── Utility ─────────────────────────────────────────────────────────
+
+  private getTableColumns(tableName: string): Set<string> {
+    const rows = this.database.prepare(`PRAGMA table_info(${tableName})`).all() as unknown as Array<{ name: string }>
+    return new Set(rows.map((r) => r.name))
+  }
+
   list(): StoredConnection[] {
     const rows = this.database
       .prepare(`
-        SELECT c.id, c.name, c.engine, c.host, c.port, c.username, c.database_name, c.password_cipher, c.save_password, c.is_open, c.color,
-          c.group_id, g.name AS group_name,
+        SELECT c.id, c.name, c.engine, c.host, c.port, c.username, c.database_name, c.password_cipher, c.save_password, c.is_open, c.color, c.environment,
+          c.group_id, g.name AS group_name, COALESCE(c.sort_order, 0) AS sort_order,
           ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_password_cipher, ssh_private_key_path, ssh_passphrase_cipher,
           ssl_enabled, ssl_reject_unauthorized, ssl_ca_path, ssl_cert_path, ssl_key_path
         FROM saved_connections c LEFT JOIN connection_groups g ON g.id = c.group_id
-        ORDER BY COALESCE(g.name, ''), c.id ASC
+        ORDER BY COALESCE(g.name, ''), COALESCE(c.sort_order, 0) ASC, c.id ASC
       `)
       .all() as unknown as ConnectionRow[]
 
@@ -266,20 +370,22 @@ export class ConnectionRepository {
       port: Number(row.port),
       username: row.username,
       defaultDatabase: row.database_name,
-      password: this.decryptPassword(row.password_cipher),
+      password: this.decryptPassword(row.password_cipher) ?? '',
       savePassword: Boolean(row.save_password),
       open: Boolean(row.is_open),
       color: row.color || undefined,
+      environment: (row.environment || null) as ConnectionEnvironment | null,
       groupId: row.group_id == null ? null : Number(row.group_id),
       groupName: row.group_name || '',
+      sortOrder: Number(row.sort_order ?? 0),
       sshEnabled: Boolean(row.ssh_enabled),
       sshHost: row.ssh_host,
       sshPort: Number(row.ssh_port),
       sshUsername: row.ssh_username,
       sshAuthType: row.ssh_auth_type === 'privateKey' ? 'privateKey' : 'password',
-      sshPassword: this.decryptPassword(row.ssh_password_cipher),
+      sshPassword: this.decryptPassword(row.ssh_password_cipher) ?? '',
       sshPrivateKeyPath: row.ssh_private_key_path,
-      sshPassphrase: this.decryptPassword(row.ssh_passphrase_cipher),
+      sshPassphrase: this.decryptPassword(row.ssh_passphrase_cipher) ?? '',
       sslEnabled: Boolean(row.ssl_enabled),
       sslRejectUnauthorized: Boolean(row.ssl_reject_unauthorized),
       sslCaPath: row.ssl_ca_path,
@@ -291,8 +397,8 @@ export class ConnectionRepository {
   getById(id: number): StoredConnection | null {
     const row = this.database
       .prepare(`
-        SELECT c.id, c.name, c.engine, c.host, c.port, c.username, c.database_name, c.password_cipher, c.save_password, c.is_open, c.color,
-          c.group_id, g.name AS group_name,
+        SELECT c.id, c.name, c.engine, c.host, c.port, c.username, c.database_name, c.password_cipher, c.save_password, c.is_open, c.color, c.environment,
+          c.group_id, g.name AS group_name, COALESCE(c.sort_order, 0) AS sort_order,
           ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_password_cipher, ssh_private_key_path, ssh_passphrase_cipher,
           ssl_enabled, ssl_reject_unauthorized, ssl_ca_path, ssl_cert_path, ssl_key_path
         FROM saved_connections c LEFT JOIN connection_groups g ON g.id = c.group_id
@@ -310,20 +416,22 @@ export class ConnectionRepository {
       port: tunnel?.localPort ?? Number(row.port),
       username: row.username,
       defaultDatabase: row.database_name,
-      password: this.decryptPassword(row.password_cipher),
+      password: this.decryptPassword(row.password_cipher) ?? '',
       savePassword: Boolean(row.save_password),
       open: Boolean(row.is_open),
       color: row.color || undefined,
+      environment: (row.environment || null) as ConnectionEnvironment | null,
       groupId: row.group_id == null ? null : Number(row.group_id),
       groupName: row.group_name || '',
+      sortOrder: Number(row.sort_order ?? 0),
       sshEnabled: Boolean(row.ssh_enabled),
       sshHost: row.ssh_host,
       sshPort: Number(row.ssh_port),
       sshUsername: row.ssh_username,
       sshAuthType: row.ssh_auth_type === 'privateKey' ? 'privateKey' : 'password',
-      sshPassword: this.decryptPassword(row.ssh_password_cipher),
+      sshPassword: this.decryptPassword(row.ssh_password_cipher) ?? '',
       sshPrivateKeyPath: row.ssh_private_key_path,
-      sshPassphrase: this.decryptPassword(row.ssh_passphrase_cipher),
+      sshPassphrase: this.decryptPassword(row.ssh_passphrase_cipher) ?? '',
       sslEnabled: Boolean(row.ssl_enabled),
       sslRejectUnauthorized: Boolean(row.ssl_reject_unauthorized),
       sslCaPath: row.ssl_ca_path,
@@ -346,10 +454,10 @@ export class ConnectionRepository {
     const result = this.database
       .prepare(`
         INSERT INTO saved_connections (
-          name, engine, host, port, username, database_name, password_cipher, save_password, color, group_id,
+          name, engine, host, port, username, database_name, password_cipher, save_password, color, environment, group_id,
           ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_password_cipher, ssh_private_key_path, ssh_passphrase_cipher,
           ssl_enabled, ssl_reject_unauthorized, ssl_ca_path, ssl_cert_path, ssl_key_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         input.name.trim(),
@@ -361,6 +469,7 @@ export class ConnectionRepository {
         passwordCipher,
         input.savePassword ? 1 : 0,
         input.color || '',
+        input.environment ?? '',
         input.groupId ?? null,
         input.ssh?.enabled ? 1 : 0,
         input.ssh?.host.trim() || '',
@@ -380,6 +489,28 @@ export class ConnectionRepository {
     return Number(result.lastInsertRowid)
   }
 
+  updateSortOrders(orders: Array<{ id: number; sortOrder: number }>): void {
+    const stmt = this.database.prepare('UPDATE saved_connections SET sort_order = ? WHERE id = ?')
+    this.database.exec('BEGIN TRANSACTION')
+    try {
+      for (const item of orders) {
+        stmt.run(item.sortOrder, item.id)
+      }
+      this.database.exec('COMMIT')
+    } catch (err) {
+      this.database.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  updateColor(id: number, color: string): void {
+    this.database.prepare('UPDATE saved_connections SET color=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(color, id)
+  }
+
+  updateEnvironment(id: number, environment: ConnectionEnvironment | null): void {
+    this.database.prepare('UPDATE saved_connections SET environment=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(environment, id)
+  }
+
   update(input: UpdateConnectionInput): void {
     const current = this.database.prepare(`
       SELECT password_cipher, ssh_password_cipher, ssh_passphrase_cipher FROM saved_connections WHERE id = ?
@@ -392,13 +523,13 @@ export class ConnectionRepository {
       ? null : input.ssh.passphrase ? this.encryptPassword(input.ssh.passphrase) : current.ssh_passphrase_cipher
     this.database.prepare(`
       UPDATE saved_connections SET
-        name=?,engine=?,host=?,port=?,username=?,database_name=?,password_cipher=?,save_password=?,color=?,group_id=?,
+        name=?,engine=?,host=?,port=?,username=?,database_name=?,password_cipher=?,save_password=?,color=?,environment=?,group_id=?,
         ssh_enabled=?,ssh_host=?,ssh_port=?,ssh_username=?,ssh_auth_type=?,ssh_password_cipher=?,ssh_private_key_path=?,ssh_passphrase_cipher=?,
         ssl_enabled=?,ssl_reject_unauthorized=?,ssl_ca_path=?,ssl_cert_path=?,ssl_key_path=?,updated_at=CURRENT_TIMESTAMP
       WHERE id=?
     `).run(
       input.name.trim(), input.engine, input.host.trim(), input.port, input.username.trim(), input.defaultDatabase.trim(),
-      passwordCipher, input.savePassword ? 1 : 0, input.color || '', input.groupId ?? null,
+      passwordCipher, input.savePassword ? 1 : 0, input.color || '', input.environment ?? '', input.groupId ?? null,
       input.ssh?.enabled ? 1 : 0, input.ssh?.host.trim() || '', input.ssh?.port || 22,
       input.ssh?.username.trim() || '', input.ssh?.authType || 'password', sshPasswordCipher,
       input.ssh?.privateKeyPath?.trim() || '', sshPassphraseCipher,
@@ -417,9 +548,9 @@ export class ConnectionRepository {
     this.database.prepare('DELETE FROM saved_connections WHERE id = ?').run(id)
   }
 
-  duplicate(id: number): void {
+  duplicate(id: number): number {
     const source = this.database.prepare(`
-      SELECT name, engine, host, port, username, database_name, password_cipher, save_password, color, group_id,
+      SELECT name, engine, host, port, username, database_name, password_cipher, save_password, color, environment, group_id,
         ssh_enabled,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_password_cipher,ssh_private_key_path,ssh_passphrase_cipher,
         ssl_enabled,ssl_reject_unauthorized,ssl_ca_path,ssl_cert_path,ssl_key_path
       FROM saved_connections WHERE id = ?
@@ -434,33 +565,47 @@ export class ConnectionRepository {
     let suffix = 2
     while (existingNames.has(copyName)) copyName = `${source.name} 副本 ${suffix++}`
 
-    this.database.prepare(`
+    const result = this.database.prepare(`
       INSERT INTO saved_connections (
-        name, engine, host, port, username, database_name, password_cipher, save_password, color, group_id,
+        name, engine, host, port, username, database_name, password_cipher, save_password, color, environment, group_id,
         ssh_enabled,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_password_cipher,ssh_private_key_path,ssh_passphrase_cipher,
         ssl_enabled,ssl_reject_unauthorized,ssl_ca_path,ssl_cert_path,ssl_key_path,is_open
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `).run(
       copyName, source.engine, source.host, source.port, source.username, source.database_name,
-      source.password_cipher, source.save_password, source.color, source.group_id,
+      source.password_cipher, source.save_password, source.color, source.environment, source.group_id,
       source.ssh_enabled, source.ssh_host, source.ssh_port, source.ssh_username, source.ssh_auth_type,
       source.ssh_password_cipher, source.ssh_private_key_path, source.ssh_passphrase_cipher,
       source.ssl_enabled, source.ssl_reject_unauthorized, source.ssl_ca_path, source.ssl_cert_path, source.ssl_key_path
     )
+    return Number(result.lastInsertRowid)
   }
 
   listGroups(): ConnectionGroup[] {
-    return (this.database.prepare(`
-      SELECT g.id, g.name, COUNT(c.id) AS connection_count
-      FROM connection_groups g LEFT JOIN saved_connections c ON c.group_id = g.id
-      GROUP BY g.id, g.name ORDER BY g.name COLLATE NOCASE
-    `).all() as unknown as Array<{ id: number; name: string; connection_count: number }>).map((row) => ({
-      id: Number(row.id), name: row.name, connectionCount: Number(row.connection_count)
+    const columns = this.getTableColumns('connection_groups')
+    const hasCategory = columns.has('category')
+    const sql = hasCategory
+      ? `SELECT g.id, g.name, COALESCE(g.category, 'database') AS category, COUNT(c.id) AS connection_count
+         FROM connection_groups g LEFT JOIN saved_connections c ON c.group_id = g.id
+         GROUP BY g.id, g.name, g.category ORDER BY g.name COLLATE NOCASE`
+      : `SELECT g.id, g.name, 'database' AS category, COUNT(c.id) AS connection_count
+         FROM connection_groups g LEFT JOIN saved_connections c ON c.group_id = g.id
+         GROUP BY g.id, g.name ORDER BY g.name COLLATE NOCASE`
+    return (this.database.prepare(sql).all() as unknown as Array<{ id: number; name: string; category?: string; connection_count: number }>).map((row) => ({
+      id: Number(row.id),
+      name: row.name,
+      category: (row.category === 'ssh' ? 'ssh' : 'database') as 'database' | 'ssh',
+      connectionCount: Number(row.connection_count)
     }))
   }
 
-  createGroup(name: string): void {
-    this.database.prepare('INSERT INTO connection_groups (name) VALUES (?)').run(name.trim())
+  createGroup(name: string, category: 'database' | 'ssh' = 'database'): void {
+    const columns = this.getTableColumns('connection_groups')
+    if (columns.has('category')) {
+      this.database.prepare('INSERT INTO connection_groups (name, category) VALUES (?, ?)').run(name.trim(), category)
+    } else {
+      this.database.prepare('INSERT INTO connection_groups (name) VALUES (?)').run(name.trim())
+    }
   }
 
   deleteGroup(id: number): void {
@@ -518,7 +663,7 @@ export class ConnectionRepository {
       provider: row.provider,
       endpoint: row.endpoint,
       model: row.model_name,
-      apiKey: this.decryptPassword(row.api_key_cipher),
+      apiKey: this.decryptPassword(row.api_key_cipher) ?? '',
       hasApiKey: Boolean(row.api_key_cipher),
       createdAt: row.created_at,
       updatedAt: row.updated_at
@@ -526,7 +671,21 @@ export class ConnectionRepository {
   }
 
   getAiModel(id: number): StoredAiModel | null {
-    return this.listAiModels().find((model) => model.id === id) ?? null
+    const row = this.database.prepare(
+      'SELECT id, name, provider, endpoint, model_name, api_key_cipher, created_at, updated_at FROM ai_models WHERE id = ?'
+    ).get(id) as unknown as AiModelRow | undefined
+    if (!row) return null
+    return {
+      id: Number(row.id),
+      name: row.name,
+      provider: row.provider,
+      endpoint: row.endpoint,
+      model: row.model_name,
+      apiKey: this.decryptPassword(row.api_key_cipher) ?? '',
+      hasApiKey: Boolean(row.api_key_cipher),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }
   }
 
   saveAiModel(input: AiSaveModelInput): StoredAiModel {
@@ -561,12 +720,14 @@ export class ConnectionRepository {
     return safeStorage.encryptString(password)
   }
 
-  private decryptPassword(cipher: Uint8Array | null): string {
-    if (!cipher || !safeStorage.isEncryptionAvailable()) return ''
+  private decryptPassword(cipher: Uint8Array | null): string | undefined {
+    if (!cipher) return undefined
+    if (!safeStorage.isEncryptionAvailable()) return undefined
     try {
       return safeStorage.decryptString(Buffer.from(cipher))
-    } catch {
-      return ''
+    } catch (e) {
+      console.error('[Repository] 密码解密失败:', e)
+      return undefined
     }
   }
 }

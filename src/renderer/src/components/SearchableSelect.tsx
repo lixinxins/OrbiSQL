@@ -18,6 +18,7 @@ interface SearchableSelectProps {
 function SearchableSelect({ value, options, placeholder, disabled, onChange }: SearchableSelectProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  const [openUpward, setOpenUpward] = useState(false)
   const [search, setSearch] = useState('')
   const selected = options.find((option) => option.value === value)
   const normalizedSearch = search.trim().toLowerCase()
@@ -26,7 +27,11 @@ function SearchableSelect({ value, options, placeholder, disabled, onChange }: S
   )
 
   useEffect(() => {
-    if (!open) return
+    if (!open || !rootRef.current) return
+    const rect = rootRef.current.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom
+    setOpenUpward(spaceBelow < 240)
+
     const close = (event: globalThis.PointerEvent): void => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
     }
@@ -61,7 +66,7 @@ function SearchableSelect({ value, options, placeholder, disabled, onChange }: S
         <CaretDown className="select-caret" />
       </div>
       {open && (
-        <div className="searchable-options">
+        <div className={`searchable-options${openUpward ? ' upward' : ''}`}>
           {filteredOptions.length > 0 ? filteredOptions.map((option) => (
             <button
               type="button"

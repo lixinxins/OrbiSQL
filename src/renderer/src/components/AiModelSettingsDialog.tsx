@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Check, Cloud, GearSix, HardDrives, PencilSimple, Plus, Trash, X } from '@phosphor-icons/react'
-import type { AiProviderType, AiSaveModelInput, AiStoredModel } from '../../../shared/ai-agent'
+import type { AiProviderType, AiSaveModelInput, AiStoredModel } from '@/shared/ai-agent'
 
 interface AiModelSettingsDialogProps {
   models: AiStoredModel[]

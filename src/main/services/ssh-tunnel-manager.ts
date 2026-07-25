@@ -32,6 +32,8 @@ const signatureFor = (connection: SshTunnelConnection): string => JSON.stringify
   sshUsername: connection.sshUsername,
   authType: connection.sshAuthType,
   keyPath: connection.sshPrivateKeyPath,
+  sshPassword: connection.sshPassword,
+  sshPassphrase: connection.sshPassphrase,
   targetHost: connection.host,
   targetPort: connection.port
 })
@@ -85,6 +87,7 @@ export class SshTunnelManager {
         }
         socket.pipe(stream).pipe(socket)
         stream.on('error', (streamError: Error) => socket.destroy(streamError))
+        socket.on('error', () => stream.destroy())
       })
     })
     await new Promise<void>((resolve, reject) => {
@@ -103,7 +106,8 @@ export class SshTunnelManager {
       if (this.tunnels.get(key) === tunnel) this.closeTunnel(key)
     }
     client.once('close', invalidate)
-    client.once('error', invalidate)
+    // 使用 on 而非 once：网络波动可能多次触发 error，需持续兜底避免 Unhandled error event
+    client.on('error', invalidate)
     return { localHost: tunnel.localHost, localPort: tunnel.localPort }
   }
 
@@ -117,6 +121,7 @@ export class SshTunnelManager {
     if (!tunnel) return
     this.tunnels.delete(key)
     tunnel.server.close()
+    tunnel.client.removeAllListeners()
     tunnel.client.end()
   }
 
