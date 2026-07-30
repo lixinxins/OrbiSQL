@@ -25,6 +25,7 @@ export const IpcChannel = {
     listGroups: 'connections:list-groups',
     createGroup: 'connections:create-group',
     deleteGroup: 'connections:delete-group',
+    renameGroup: 'connections:rename-group',
     setGroup: 'connections:set-group',
     selectSqliteFile: 'connections:select-sqlite-file',
     selectSecurityFile: 'connections:select-security-file',
@@ -88,6 +89,14 @@ export const IpcChannel = {
     getDefinition: 'tables:get-definition',
     update: 'tables:update',
     rename: 'tables:rename'
+  },
+  memory: {
+    getStats: 'memory:get-stats',
+    takeHeapSnapshot: 'memory:take-heap-snapshot',
+    forceGc: 'memory:force-gc'
+  },
+  workspace: {
+    getStats: 'workspace:get-stats'
   },
   ssh: {
     connect: 'ssh:connect',

@@ -2,11 +2,10 @@
   color-scheme: light;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
   color: #1e293b;
-  background: #f8fafc;
   font-synthesis: none;
 
-  --bg-app: #f8fafc;
-  --bg-base: #ffffff;
+  --bg-app: #f8fbff;
+  --bg-base: transparent;
   --bg-surface: #f1f5f9;
   --bg-elevated: #ffffff;
   --bg-hover: #e2e8f0;
@@ -53,141 +52,61 @@
 
 :root[data-theme='classic'] {
   color-scheme: dark;
-  color: hsl(0, 0%, 92%);
-  background: linear-gradient(135deg, hsl(260, 30%, 20%) 0%, hsl(250, 30%, 30%) 100%);
+  color: #edf3ff;
 
-  --bg-app: linear-gradient(135deg, hsl(260, 30%, 20%) 0%, hsl(250, 30%, 30%) 100%);
-  --bg-base: hsl(255, 25%, 15%);
-  --bg-surface: hsl(255, 22%, 20%);
-  --bg-elevated: hsl(255, 22%, 24%);
-  --bg-hover: hsl(255, 20%, 28%);
-  --bg-active: hsl(255, 20%, 36%);
-  --bg-selected: rgba(48, 140, 232, 0.22);
+  /* ── 统一深色配色 ── */
+  --bg-app: #10162f;
+  --bg-base: #10162f;
+  --bg-surface: rgba(22,28,54,.62);
+  --bg-elevated: rgba(32,38,67,.52);
+  --bg-hover: rgba(255,255,255,.06);
+  --bg-active: rgba(255,255,255,.10);
+  --bg-selected: linear-gradient(90deg, rgba(49,211,238,.15), rgba(126,87,255,.18));
 
-  --primary: hsl(210, 80%, 55%);
-  --primary-hover: hsl(210, 80%, 48%);
-  --primary-light: hsl(210, 80%, 65%);
-  --primary-surface: rgba(48, 140, 232, 0.2);
-  --primary-border: rgba(48, 140, 232, 0.45);
+  --primary: #2ee8f5;
+  --primary-hover: #19c6ea;
+  --primary-light: #34d9ff;
+  --primary-surface: rgba(46,232,245,.16);
+  --primary-border: rgba(46,232,245,.30);
 
-  --brand-start: hsl(210, 80%, 55%);
-  --brand-end: hsl(230, 75%, 60%);
+  --brand-start: #34d9ff;
+  --brand-end: #9b6dff;
 
-  --text: hsl(0, 0%, 92%);
-  --text-secondary: hsl(0, 0%, 78%);
-  --muted: hsl(0, 0%, 62%);
-  --text-subtle: hsl(0, 0%, 46%);
+  --text: #edf3ff;
+  --text-secondary: #aeb8d4;
+  --muted: #7e88a5;
+  --text-subtle: #5f6892;
 
-  --border: rgba(255, 255, 255, 0.12);
-  --soft-border: rgba(255, 255, 255, 0.06);
-  --sidebar: rgba(30, 24, 48, 0.72);
+  --border: rgba(255,255,255,.14);
+  --soft-border: rgba(255,255,255,.08);
+  --sidebar: rgba(7,13,28,.18);
 
-  --success: #10b981;
+  --success: #4ade80;
   --warning: #f59e0b;
-  --danger: #f87171;
-  --info: hsl(210, 80%, 55%);
+  --danger: #f472b6;
+  --info: #35a0ff;
 
-  --glass-bg: rgba(30, 24, 48, 0.75);
-  --glass-border: rgba(255, 255, 255, 0.14);
-  --glass-blur: blur(16px);
+  /* 辅助色 */
+  --cyan: #2ee8f5;
+  --cyan-2: #19c6ea;
+  --blue: #35a0ff;
+  --purple: #8b5dff;
+  --green: #4ade80;
+  --good: #6ee7a2;
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
-  --shadow-glow: 0 0 24px rgba(48, 140, 232, 0.35);
+  --glass-bg: rgba(11,16,33,.62);
+  --glass-border: rgba(255,255,255,.18);
+  --glass-blur: blur(30px) saturate(150%);
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.35);
+  --shadow-md: 0 8px 22px rgba(0,0,0,.40);
+  --shadow-lg: 0 24px 64px rgba(0,0,0,.48);
+  --shadow-glow: 0 0 24px rgba(46,232,245,.30);
+
+  --font-mono: "JetBrains Mono","SFMono-Regular",Consolas,monospace;
 }
 
-:root[data-theme='slate'] {
-  color-scheme: dark;
-  color: #e2e8f0;
-  background: #0f172a;
-
-  --bg-app: #0f172a;
-  --bg-base: #1e293b;
-  --bg-surface: #334155;
-  --bg-elevated: #334155;
-  --bg-hover: #475569;
-  --bg-active: #64748b;
-  --bg-selected: rgba(148, 163, 184, 0.22);
-
-  --primary: #38bdf8;
-  --primary-hover: #7dd3fc;
-  --primary-light: #bae6fd;
-  --primary-surface: rgba(56, 189, 248, 0.18);
-  --primary-border: rgba(56, 189, 248, 0.4);
-
-  --brand-start: #0284c7;
-  --brand-end: #38bdf8;
-
-  --text: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --muted: #94a3b8;
-  --text-subtle: #64748b;
-
-  --border: rgba(255, 255, 255, 0.12);
-  --soft-border: rgba(255, 255, 255, 0.06);
-  --sidebar: #1e293b;
-
-  --success: #34d399;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --info: #38bdf8;
-
-  --glass-bg: rgba(30, 41, 59, 0.8);
-  --glass-border: rgba(255, 255, 255, 0.14);
-  --glass-blur: blur(16px);
-
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
-  --shadow-glow: 0 0 24px rgba(56, 189, 248, 0.35);
-}
-
-:root[data-theme='violet'] {
-  color-scheme: dark;
-  color: #f3e8ff;
-  background: #0d0714;
-
-  --bg-app: #0d0714;
-  --bg-base: #140b24;
-  --bg-surface: #1f1235;
-  --bg-elevated: #281745;
-  --bg-hover: #381e61;
-  --bg-active: #4c2882;
-  --bg-selected: rgba(168, 85, 247, 0.25);
-
-  --primary: #a855f7;
-  --primary-hover: #c084fc;
-  --primary-light: #e9d5ff;
-  --primary-surface: rgba(168, 85, 247, 0.2);
-  --primary-border: rgba(168, 85, 247, 0.45);
-
-  --brand-start: #8b5cf6;
-  --brand-end: #d946ef;
-
-  --text: #faf5ff;
-  --text-secondary: #e9d5ff;
-  --muted: #c084fc;
-  --text-subtle: #7e22ce;
-
-  --border: rgba(168, 85, 247, 0.2);
-  --soft-border: rgba(168, 85, 247, 0.1);
-  --sidebar: #140b24;
-
-  --success: #34d399;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --info: #c084fc;
-
-  --glass-bg: rgba(20, 11, 36, 0.8);
-  --glass-border: rgba(168, 85, 247, 0.25);
-  --glass-blur: blur(16px);
-
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
-  --shadow-glow: 0 0 26px rgba(168, 85, 247, 0.4);
-}
+/* slate / violet 主题已移除，统一使用 classic（QueryFlow 玻璃拟态）作为默认深色主题 */
 
 :root[data-theme='light'] .connection-item.selected,
 :root[data-theme='light'] .table-row.selected,
@@ -202,21 +121,7 @@
 :root[data-theme='classic'] .welcome-mark,
 :root[data-theme='classic'] .database-tables-title > span,
 :root[data-theme='classic'] .save-query-dialog-icon,
-:root[data-theme='classic'] .settings-dialog > header > span,
-:root[data-theme='slate'] .connection-item.selected,
-:root[data-theme='violet'] .connection-item.selected,
-:root[data-theme='slate'] .table-row.selected,
-:root[data-theme='violet'] .table-row.selected,
-:root[data-theme='slate'] .quick-icon.blue,
-:root[data-theme='violet'] .quick-icon.blue,
-:root[data-theme='slate'] .welcome-mark,
-:root[data-theme='violet'] .welcome-mark,
-:root[data-theme='slate'] .database-tables-title > span,
-:root[data-theme='violet'] .database-tables-title > span,
-:root[data-theme='slate'] .save-query-dialog-icon,
-:root[data-theme='violet'] .save-query-dialog-icon,
-:root[data-theme='slate'] .settings-dialog > header > span,
-:root[data-theme='violet'] .settings-dialog > header > span {
+:root[data-theme='classic'] .settings-dialog > header > span {
   background: var(--primary-surface);
   color: var(--primary-light, var(--primary));
 }

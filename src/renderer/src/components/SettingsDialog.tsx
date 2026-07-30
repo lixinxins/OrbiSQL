@@ -39,11 +39,8 @@ function SettingsDialog({ language, theme, onLanguageChange, onThemeChange, onCl
           <div className="">
             <div className="theme-wrap-list" role="radiogroup" aria-label="外观主题">
               {([
-                { value: 'system', label: '跟随系统', thumbClass: 'thumb-follow' },
-                { value: 'light', label: '明亮浅色', thumbClass: 'thumb-light' },
-                { value: 'classic', label: '经典蓝', thumbClass: 'thumb-blue' },
-                { value: 'slate', label: '柔和灰', thumbClass: 'thumb-gray' },
-                { value: 'violet', label: '紫罗兰', thumbClass: 'thumb-purple' }
+                { value: 'classic', label: 'QueryFlow 玻璃', thumbClass: 'thumb-blue' },
+                { value: 'light', label: '明亮浅色', thumbClass: 'thumb-light' }
               ] as Array<{ value: AppTheme; label: string; thumbClass: string }>).map((option) => (
                 <button
                   type="button"

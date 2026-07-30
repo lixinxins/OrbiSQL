@@ -98,6 +98,7 @@ function App() {
   const activeWorkspace = useTabStore((s) => s.activeWorkspace)
   const aiDatabaseOpen = useTabStore((s) => s.aiDatabaseOpen)
   const pinnedTabIds = useTabStore((s) => s.pinnedTabIds)
+  const focusedConnectionId = useSidebarStore((s) => s.focusedConnectionId)
 
   // Slice actions
   const addQueryTab = useQueryTabsStore((s) => s.addQueryTab)
@@ -245,28 +246,18 @@ function App() {
     localStorage.setItem('omnidb.preferences.theme', theme)
 
     const applyTheme = (currentTheme: AppTheme) => {
-      if (currentTheme === 'system') {
-        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-        document.documentElement.dataset.theme = isDark ? 'classic' : 'light'
-      } else {
-        document.documentElement.dataset.theme = currentTheme
-      }
+      // 兼容旧的 system 偏好；项目默认保持浅色，深色玻璃主题仅在用户主动选择时启用。
+      const resolved = currentTheme === 'classic' ? 'classic' : 'light'
+      document.documentElement.dataset.theme = resolved
     }
 
     applyTheme(theme)
 
     if (theme === 'system') {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-      const handleChange = (e: MediaQueryListEvent) => {
-        document.documentElement.dataset.theme = e.matches ? 'classic' : 'light'
-      }
-      mediaQuery.addEventListener('change', handleChange)
+      // 兼容旧持久化数据：system 统一回落到浅色。
       applyInterfaceLanguage(language)
       void window.omnidb.updatePreferences({ language, theme })
-      return () => {
-        mediaQuery.removeEventListener('change', handleChange)
-        stopInterfaceLanguage()
-      }
+      return stopInterfaceLanguage
     }
 
     applyInterfaceLanguage(language)
@@ -274,8 +265,14 @@ function App() {
     return stopInterfaceLanguage
   }, [language, theme])
 
-  // Status bar: ping + server version
+  // Status bar: ping + server version + connection counts
   useEffect(() => {
+    // Count all active database connections and SSH sessions
+    const dbConnectedCount = connections.filter((c) => c.connected).length
+    const sshConnectedCount = sshTerminalTabs.length
+    // Preserve focusedItem from current state
+    const currentFocusedItem = useUIStore.getState().statusInfo.focusedItem
+
     const activeTab = (() => {
       if (activeWorkspace === 'database' && activeDatabaseTabId)
         return databaseTabs.find((t) => t.id === activeDatabaseTabId) ?? null
@@ -287,20 +284,31 @@ function App() {
       }
       return null
     })()
-    if (!activeTab) {
-      uiActions.setStatusInfo({ ping: null, version: '', charset: 'UTF-8' })
+
+    // Determine connection ID: prefer active tab, fallback to sidebar focused connection
+    const connectionId = activeTab?.connectionId ?? focusedConnectionId
+    if (!connectionId) {
+      uiActions.setStatusInfo({ ping: null, version: '', charset: 'UTF-8', dbConnectedCount, sshConnectedCount, focusedItem: currentFocusedItem })
       return
     }
-    const conn = connections.find((c) => c.id === activeTab.connectionId)
+    const conn = connections.find((c) => c.id === connectionId)
     if (!conn?.connected) {
-      uiActions.setStatusInfo({ ping: null, version: '', charset: 'UTF-8' })
+      uiActions.setStatusInfo({ ping: null, version: '', charset: 'UTF-8', dbConnectedCount, sshConnectedCount, focusedItem: currentFocusedItem })
       return
     }
+
+    // Use active tab's database for ping query, otherwise use connection's default database
+    const databaseName = activeTab?.databaseName ?? conn.defaultDatabase
+    if (!databaseName) {
+      uiActions.setStatusInfo({ ping: null, version: '', charset: 'UTF-8', dbConnectedCount, sshConnectedCount, focusedItem: currentFocusedItem })
+      return
+    }
+
     const start = performance.now()
     void window.omnidb.queries
       .execute(
-        activeTab.connectionId,
-        activeTab.databaseName,
+        connectionId,
+        databaseName,
         conn.engine === 'PostgreSQL'
           ? 'SELECT version()'
           : conn.engine === 'SQLite'
@@ -315,12 +323,15 @@ function App() {
         uiActions.setStatusInfo({
           ping,
           version: short,
-          charset: conn.engine === 'PostgreSQL' ? 'UTF8' : 'utf8mb4'
+          charset: conn.engine === 'PostgreSQL' ? 'UTF8' : 'utf8mb4',
+          dbConnectedCount,
+          sshConnectedCount,
+          focusedItem: currentFocusedItem
         })
       })
-      .catch(() => uiActions.setStatusInfo({ ping: null, version: '', charset: 'UTF-8' }))
+      .catch(() => uiActions.setStatusInfo({ ping: null, version: '', charset: 'UTF-8', dbConnectedCount, sshConnectedCount, focusedItem: currentFocusedItem }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspace, activeDatabaseTabId, activeQueryId])
+  }, [activeWorkspace, activeDatabaseTabId, activeQueryId, focusedConnectionId, connections, sshTerminalTabs])
 
   // ── Helpers ───────────────────────────────────────────────
 
@@ -505,6 +516,7 @@ function App() {
     <div className={`app${isMacOS ? ' platform-macos' : ''}`}>
       <HeaderToolbar
         onOpenNewConnectionDialog={handleOpenNewConnectionDialog}
+        onOpenAiDatabase={openAiDatabase}
         onOpenNewConnectionGroupDialog={() => dialogActions.setShowConnectionGroupDialog(true)}
         onOpenDefaultQuery={openDefaultQuery}
         onOpenAdvancedTool={(mode) => dialogActions.setAdvancedTool({ mode })}
@@ -517,41 +529,41 @@ function App() {
         }}
       />
 
-      <div className="workbench">
+      <div className="content">
         <ConnectionSidebar />
 
-        <main className="content-area table-designer-workspace query-workspace-shell">
-          <WorkspaceTabBar
-            activeWorkspace={activeWorkspace}
-            activateWorkspaceTab={activateWorkspaceTab}
-            databaseTabs={databaseTabs}
-            activeDatabaseTabId={activeDatabaseTabId}
-            closeDatabaseOverview={closeDatabaseOverview}
-            tableDialogs={tableDialogs}
-            activeTableDialogId={activeTableDialogId}
-            closeTableDesigner={closeTableDesigner}
-            queryTabs={queryTabs}
-            activeQueryId={activeQueryId}
-            closeQuery={closeQuery}
-            tableDataTabs={tableDataTabs}
-            activeTableDataId={activeTableDataId}
-            closeTableData={closeTableData}
-            sshTerminalTabs={sshTerminalTabs}
-            activeSshTerminalId={activeSshTerminalId}
-            closeSshTerminal={closeSshTerminal}
-            docTabs={docTabs}
-            activeDocId={activeDocId}
-            closeDocTab={closeDocTab}
-            aiDatabaseOpen={aiDatabaseOpen}
-            pinnedTabIds={pinnedTabIds}
-            togglePinTab={togglePinTab}
-            closeWithFallback={closeWithFallback}
-            openTabContextMenu={openTabContextMenu}
-            maxVisibleWorkspaceTabs={maxVisibleWorkspaceTabs}
-            showTabOverflow={showTabOverflow}
-            setShowTabOverflow={setShowTabOverflow}
-            workspaceTabbarRef={workspaceTabbarRef}
-          />
+        <main  className="content-area  table-designer-workspace query-workspace-shell">
+           <WorkspaceTabBar
+             activeWorkspace={activeWorkspace}
+             activateWorkspaceTab={activateWorkspaceTab}
+             databaseTabs={databaseTabs}
+             activeDatabaseTabId={activeDatabaseTabId}
+             closeDatabaseOverview={closeDatabaseOverview}
+             tableDialogs={tableDialogs}
+             activeTableDialogId={activeTableDialogId}
+             closeTableDesigner={closeTableDesigner}
+             queryTabs={queryTabs}
+             activeQueryId={activeQueryId}
+             closeQuery={closeQuery}
+             tableDataTabs={tableDataTabs}
+             activeTableDataId={activeTableDataId}
+             closeTableData={closeTableData}
+             sshTerminalTabs={sshTerminalTabs}
+             activeSshTerminalId={activeSshTerminalId}
+             closeSshTerminal={closeSshTerminal}
+             docTabs={docTabs}
+             activeDocId={activeDocId}
+             closeDocTab={closeDocTab}
+             aiDatabaseOpen={aiDatabaseOpen}
+             pinnedTabIds={pinnedTabIds}
+             togglePinTab={togglePinTab}
+             closeWithFallback={closeWithFallback}
+             openTabContextMenu={openTabContextMenu}
+             maxVisibleWorkspaceTabs={maxVisibleWorkspaceTabs}
+             showTabOverflow={showTabOverflow}
+             setShowTabOverflow={setShowTabOverflow}
+             workspaceTabbarRef={workspaceTabbarRef}
+           />
 
           {activeWorkspace === null && (
             <WorkbenchWelcomeView
@@ -559,7 +571,6 @@ function App() {
               recentConnections={recentConnections}
               onOpenNewConnectionDialog={handleOpenNewConnectionDialog}
               onOpenDefaultQuery={openDefaultQuery}
-              onOpenAiDatabase={openAiDatabase}
               onOpenAdvancedTool={(mode) => dialogActions.setAdvancedTool({ mode })}
               onOpenQueryForRecent={openQuery}
             />
@@ -652,9 +663,9 @@ function App() {
               onOpenQueryTab={openQueryWithSql}
             />
           )}
+          <StatusBar />
         </main>
       </div>
-      <StatusBar />
       <TabContextMenuModal
         tabContextMenu={tabContextMenu}
         contextMenuTabs={contextMenuTabs}

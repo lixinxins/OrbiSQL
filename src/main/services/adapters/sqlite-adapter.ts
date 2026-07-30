@@ -150,14 +150,14 @@ const filterSqlite = (filter: TableDataFilter): string => {
 
 // ── SQLite handle cache (Worker) ─────────────────────────────────────
 
-const sqliteHandleIds = new Set<string>()
+const sqliteHandleIds = new Map<string, number>()
 
 export const ensureSqliteHandle = async (connection: AdapterConnection): Promise<string> => {
   const handleId = connection.host
   if (!sqliteHandleIds.has(handleId)) {
     await sqliteWorkerOpen(handleId, handleId)
-    sqliteHandleIds.add(handleId)
   }
+  sqliteHandleIds.set(handleId, Date.now())
   return handleId
 }
 
@@ -167,6 +167,17 @@ export const closeSqliteHandle = async (connection: AdapterConnection): Promise<
   if (sqliteHandleIds.has(handleId)) {
     sqliteHandleIds.delete(handleId)
     await sqliteWorkerClose(handleId)
+  }
+}
+
+/** 驱逐空闲超过 maxIdleMs 的 SQLite 句柄 */
+export const evictIdleSqliteHandles = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  for (const [handleId, lastAccess] of sqliteHandleIds) {
+    if (now - lastAccess > maxIdleMs) {
+      sqliteHandleIds.delete(handleId)
+      await sqliteWorkerClose(handleId).catch(() => {})
+    }
   }
 }
 
@@ -267,6 +278,7 @@ export const executeSqliteQuery = async (connection: AdapterConnection, sql: str
       let cursorId: string | undefined
       if (truncated) {
         const cursor = createCursor({
+          connectionId: connection.id,
           engine: 'SQLite',
           connectionKey: connection.host,
           databaseName: '',

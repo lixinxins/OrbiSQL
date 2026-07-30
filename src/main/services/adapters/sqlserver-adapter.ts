@@ -1,6 +1,7 @@
 import sql from 'mssql'
 import {
   isSelectQuery,
+  getTopLevelStatement,
   QUERY_ROW_LIMIT,
   createCursor,
   updateCursorOffset,
@@ -72,31 +73,57 @@ const filterMssql = (filter: TableDataFilter): string => {
 /** 将 SELECT 改写为 TOP N 形式（SQL Server 不支持 LIMIT 语法） */
 const applyTop = (sqlText: string, limit: number): string => {
   const trimmed = sqlText.trim().replace(/;\s*$/, '')
-  if (/\bTOP\s+\d+/i.test(trimmed)) return trimmed
-  return trimmed.replace(/^(\s*SELECT\s+)/i, `$1TOP ${limit} `)
+  if (/\bOFFSET\s+\d+\s+ROWS?/i.test(trimmed)) return trimmed
+  const statement = getTopLevelStatement(trimmed)
+  const topMatch = statement.keyword === 'SELECT'
+    ? trimmed.slice(statement.index).match(/^SELECT\s+(?:(?:ALL|DISTINCT)\s+)?TOP\s*\(?\s*(\d+)\s*\)?/i)
+    : null
+  if (topMatch) {
+    const requested = Number(topMatch[1])
+    if (requested <= limit) return trimmed
+    const matchedTop = topMatch[0].match(/\bTOP\s*\(?\s*\d+\s*\)?/i)
+    if (!matchedTop || matchedTop.index == null) return trimmed
+    const topStart = statement.index + matchedTop.index
+    return `${trimmed.slice(0, topStart)}TOP ${limit}${trimmed.slice(topStart + matchedTop[0].length)}`
+  }
+  if (statement.keyword !== 'SELECT') return trimmed
+  const selectEnd = statement.index + 'SELECT'.length
+  const modifier = trimmed.slice(selectEnd).match(/^\s+(?:ALL|DISTINCT)\b/i)?.[0] ?? ''
+  const insertAt = selectEnd + modifier.length
+  return `${trimmed.slice(0, insertAt)} TOP ${limit}${trimmed.slice(insertAt)}`
 }
 
 const applyTopOffset = (sqlText: string, limit: number, offset: number): string => {
   const trimmed = sqlText.trim().replace(/;\s*$/, '')
-  if (/\bOFFSET\b/i.test(trimmed)) return trimmed
-  const withTop = applyTop(trimmed, limit + offset)
-  return `${withTop} OFFSET ${offset} ROWS`
+  const withoutPagination = trimmed.replace(/\s+OFFSET\s+\d+\s+ROWS?(?:\s+FETCH\s+NEXT\s+\d+\s+ROWS?\s+ONLY)?\s*$/i, '')
+  const statement = getTopLevelStatement(withoutPagination)
+  const hasTop = statement.keyword === 'SELECT' && /^SELECT\s+(?:(?:ALL|DISTINCT)\s+)?TOP\s*\(?\s*\d+/i.test(withoutPagination.slice(statement.index))
+  if (hasTop) {
+    return `SELECT * FROM (${withoutPagination}) AS [__quilldb_page] ORDER BY (SELECT NULL) OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`
+  }
+  const orderBy = /\bORDER\s+BY\b/i.test(withoutPagination.slice(Math.max(0, statement.index))) ? '' : ' ORDER BY (SELECT NULL)'
+  return `${withoutPagination}${orderBy} OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`
 }
 
 // ── SQL Server pool cache ─────────────────────────────────────────────
 
 const mssqlPools = new Map<string, sql.ConnectionPool>()
+const mssqlLastAccess = new Map<string, number>()
 
-const getMssqlPool = async (connection: AdapterConnection): Promise<sql.ConnectionPool> => {
-  const key = `${connection.host}:${connection.port}:${connection.username}:${connection.defaultDatabase}`
+const getMssqlPool = async (connection: AdapterConnection, databaseName?: string): Promise<sql.ConnectionPool> => {
+  const database = databaseName || connection.defaultDatabase || 'master'
+  const identity = connection.id != null && connection.id > 0
+    ? `id:${connection.id}`
+    : `${connection.host}:${connection.port}:${connection.username}`
+  const key = `${identity}:${database}`
   const existing = mssqlPools.get(key)
-  if (existing?.connected) return existing
+  if (existing?.connected) { mssqlLastAccess.set(key, Date.now()); return existing }
   const config: sql.config = {
     server: connection.host,
     port: connection.port || 1433,
     user: connection.username,
     password: connection.password,
-    database: connection.defaultDatabase || 'master',
+    database,
     options: {
       encrypt: connection.sslEnabled,
       trustServerCertificate: !connection.sslRejectUnauthorized,
@@ -109,15 +136,30 @@ const getMssqlPool = async (connection: AdapterConnection): Promise<sql.Connecti
   const pool = new sql.ConnectionPool(config)
   await pool.connect()
   mssqlPools.set(key, pool)
+  mssqlLastAccess.set(key, Date.now())
   return pool
 }
 
 export const closeMssqlPools = async (connection: AdapterConnection): Promise<void> => {
-  const prefix = `${connection.host}:${connection.port}:${connection.username}`
+  const prefix = connection.id != null && connection.id > 0
+    ? `id:${connection.id}:`
+    : `${connection.host}:${connection.port}:${connection.username}:`
   for (const [key, pool] of mssqlPools) {
     if (key.startsWith(prefix)) {
       try { await pool.close() } catch { /* ignore */ }
       mssqlPools.delete(key)
+    }
+  }
+}
+
+/** 驱逐空闲超过 maxIdleMs 的连接池 */
+export const evictIdleMssqlPools = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  for (const [key, pool] of mssqlPools) {
+    if (now - (mssqlLastAccess.get(key) ?? 0) > maxIdleMs) {
+      try { await pool.close() } catch { /* ignore */ }
+      mssqlPools.delete(key)
+      mssqlLastAccess.delete(key)
     }
   }
 }
@@ -131,42 +173,35 @@ export const readMssqlDatabases = async (connection: AdapterConnection, options?
   )
 
   if (options?.light) {
-    const tableResult = await pool.request().query<{ databaseName: string; tableName: string }>(
-      `SELECT DB_NAME() AS databaseName, name AS tableName FROM sys.tables ORDER BY name`
-    )
-    const tablesByDb = new Map<string, DatabaseItem['tables']>()
-    for (const row of tableResult.recordset) {
-      const tables = tablesByDb.get(row.databaseName) ?? []
-      tables.push({ name: row.tableName, comment: '', columns: [], indexes: [], foreignKeys: [], checks: [], triggers: [] })
-      tablesByDb.set(row.databaseName, tables)
-    }
-    return dbResult.recordset.map((db: { name: string; collation_name?: string }) => ({
-      name: db.name,
-      charset: 'utf16',
-      collation: db.collation_name || '',
-      tables: tablesByDb.get(db.name) ?? [],
-      views: [],
-      functions: [],
-      procedures: [],
-      indexes: [],
-      triggers: []
+    return Promise.all(dbResult.recordset.map(async (db: { name: string; collation_name?: string }) => {
+      const databasePool = await getMssqlPool(connection, db.name)
+      const tableResult = await databasePool.request().query<{ tableName: string }>(
+        `SELECT name AS tableName FROM sys.tables ORDER BY name`
+      )
+      return {
+        name: db.name,
+        charset: 'utf16',
+        collation: db.collation_name || '',
+        tables: tableResult.recordset.map((row) => ({ name: row.tableName, comment: '', columns: [], indexes: [], foreignKeys: [], checks: [], triggers: [] })),
+        views: [], functions: [], procedures: [], indexes: [], triggers: []
+      }
     }))
   }
 
   const databases: DatabaseItem[] = []
   for (const db of dbResult.recordset) {
     try {
-      await pool.request().query(`USE [${db.name}]`)
+      const databasePool = await getMssqlPool(connection, db.name)
       const [tables, views, procs, funcs] = await Promise.all([
-        pool.request().query<{ tableName: string }>(`SELECT name AS tableName FROM sys.tables ORDER BY name`),
-        pool.request().query<{ viewName: string }>(`SELECT name AS viewName FROM sys.views WHERE is_ms_shipped = 0 ORDER BY name`),
-        pool.request().query<{ procName: string }>(`SELECT name AS procName FROM sys.procedures WHERE is_ms_shipped = 0 ORDER BY name`),
-        pool.request().query<{ funcName: string }>(`SELECT name AS funcName FROM sys.objects WHERE type IN ('FN','IF','TF') AND is_ms_shipped = 0 ORDER BY name`)
+        databasePool.request().query<{ tableName: string }>(`SELECT name AS tableName FROM sys.tables ORDER BY name`),
+        databasePool.request().query<{ viewName: string }>(`SELECT name AS viewName FROM sys.views WHERE is_ms_shipped = 0 ORDER BY name`),
+        databasePool.request().query<{ procName: string }>(`SELECT name AS procName FROM sys.procedures WHERE is_ms_shipped = 0 ORDER BY name`),
+        databasePool.request().query<{ funcName: string }>(`SELECT name AS funcName FROM sys.objects WHERE type IN ('FN','IF','TF') AND is_ms_shipped = 0 ORDER BY name`)
       ])
       const tableItems: DatabaseItem['tables'] = []
       for (const t of tables.recordset) {
         const [cols, idxs, fks] = await Promise.all([
-          pool.request().input('table', t.tableName).query<{ column_name: string; data_type: string; is_nullable: string; is_primary_key: boolean }>(
+          databasePool.request().input('table', t.tableName).query<{ column_name: string; data_type: string; is_nullable: string; is_primary_key: boolean }>(
             `SELECT c.name AS column_name, tp.name AS data_type,
               CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END AS is_nullable,
               CAST(ISNULL(pk.is_primary_key, 0) AS BIT) AS is_primary_key
@@ -180,11 +215,11 @@ export const readMssqlDatabases = async (connection: AdapterConnection, options?
              WHERE c.object_id = OBJECT_ID(@table)
              ORDER BY c.column_id`
           ),
-          pool.request().input('table', t.tableName).query<{ index_name: string }>(
+          databasePool.request().input('table', t.tableName).query<{ index_name: string }>(
             `SELECT DISTINCT i.name AS index_name FROM sys.indexes i
              WHERE i.object_id = OBJECT_ID(@table) AND i.is_primary_key = 0 AND i.type IS NOT NULL ORDER BY i.name`
           ),
-          pool.request().input('table', t.tableName).query<{ fk_name: string; ref_table: string }>(
+          databasePool.request().input('table', t.tableName).query<{ fk_name: string; ref_table: string }>(
             `SELECT fk.name AS fk_name, OBJECT_NAME(fk.referenced_object_id) AS ref_table
              FROM sys.foreign_keys fk WHERE fk.parent_object_id = OBJECT_ID(@table)`
           )
@@ -227,10 +262,7 @@ export const readMssqlDatabases = async (connection: AdapterConnection, options?
 }
 
 export const executeMssqlQuery = async (connection: AdapterConnection, databaseName: string, sqlText: string): Promise<QueryExecutionResult> => {
-  const pool = await getMssqlPool(connection)
-  if (databaseName) {
-    try { await pool.request().query(`USE [${databaseName}]`) } catch { /* ignore */ }
-  }
+  const pool = await getMssqlPool(connection, databaseName)
   const startTime = new Date().toISOString()
   const startMs = performance.now()
   try {
@@ -240,9 +272,11 @@ export const executeMssqlQuery = async (connection: AdapterConnection, databaseN
     const endTime = new Date().toISOString()
     const durationMs = Math.round(performance.now() - startMs)
 
-    if (result.recordset && result.recordset.length > 0) {
+    if (result.recordset) {
       const rows = result.recordset as Array<Record<string, unknown>>
-      const columns = Object.keys(rows[0])
+      const columns = rows.length
+        ? Object.keys(rows[0])
+        : Object.keys((result.recordset as unknown as { columns?: Record<string, unknown> }).columns ?? {})
       const truncated = isSelect && rows.length >= QUERY_ROW_LIMIT
 
       let editable: QueryExecutionResult['editable']
@@ -273,6 +307,7 @@ export const executeMssqlQuery = async (connection: AdapterConnection, databaseN
       let cursorId: string | undefined
       if (truncated) {
         const cursor = createCursor({
+          connectionId: connection.id,
           engine: 'SQL Server',
           connectionKey: `${connection.host}:${connection.port}/${databaseName}`,
           databaseName,
@@ -310,10 +345,7 @@ export const fetchMoreMssqlRows = async (
   cursor: QueryCursor,
   count: number = QUERY_ROW_LIMIT
 ): Promise<{ rows: Array<Record<string, unknown>>; done: boolean }> => {
-  const pool = await getMssqlPool(connection)
-  if (databaseName) {
-    try { await pool.request().query(`USE [${databaseName}]`) } catch { /* ignore */ }
-  }
+  const pool = await getMssqlPool(connection, databaseName)
   const limitedSql = applyTopOffset(cursor.sql, count, cursor.offset)
   const result = await pool.request().query(limitedSql)
   const rows = (result.recordset ?? []) as Array<Record<string, unknown>>
@@ -332,10 +364,7 @@ export const readMssqlTableData = async (
   filter?: TableDataFilter
 ): Promise<QueryExecutionResult> => {
   if (filter?.column) {
-    const pool = await getMssqlPool(connection)
-    if (databaseName) {
-      try { await pool.request().query(`USE [${databaseName}]`) } catch { /* ignore */ }
-    }
+    const pool = await getMssqlPool(connection, databaseName)
     const colCheck = await pool.request()
       .input('table', tableName).input('col', filter.column)
       .query<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM sys.columns WHERE object_id = OBJECT_ID(@table) AND name = @col`)
@@ -343,17 +372,13 @@ export const readMssqlTableData = async (
   }
   const where = filter?.column ? ` WHERE ${filterMssql(filter)}` : ''
   const sqlText = `SELECT * FROM ${quoteMssql(tableName)}${where}`
-  const withTop = applyTop(sqlText, limit)
-  const withOffset = offset > 0 ? `${withTop} ORDER BY (SELECT NULL) OFFSET ${offset} ROWS` : withTop
+  const withOffset = offset > 0 ? applyTopOffset(sqlText, limit, offset) : applyTop(sqlText, limit)
   const result = await executeMssqlQuery(connection, databaseName, withOffset)
   return result.success && result.rows ? { ...result, message: `已加载 ${result.rows.length} 行数据` } : result
 }
 
 export const updateMssqlRow = async (connection: AdapterConnection, databaseName: string, input: QueryUpdateRowInput): Promise<ConnectionActionResult> => {
-  const pool = await getMssqlPool(connection)
-  if (databaseName) {
-    try { await pool.request().query(`USE [${databaseName}]`) } catch { /* ignore */ }
-  }
+  const pool = await getMssqlPool(connection, databaseName)
   const pkResult = await pool.request().input('table', input.tableName).query<{ column_name: string }>(
     `SELECT c.name AS column_name FROM sys.indexes i
      JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
@@ -381,10 +406,7 @@ export const updateMssqlRow = async (connection: AdapterConnection, databaseName
 }
 
 export const deleteMssqlRow = async (connection: AdapterConnection, databaseName: string, input: QueryDeleteRowInput): Promise<ConnectionActionResult> => {
-  const pool = await getMssqlPool(connection)
-  if (databaseName) {
-    try { await pool.request().query(`USE [${databaseName}]`) } catch { /* ignore */ }
-  }
+  const pool = await getMssqlPool(connection, databaseName)
   const pkResult = await pool.request().input('table', input.tableName).query<{ column_name: string }>(
     `SELECT c.name AS column_name FROM sys.indexes i
      JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
@@ -407,10 +429,7 @@ export const deleteMssqlRow = async (connection: AdapterConnection, databaseName
 }
 
 export const getMssqlTableDefinition = async (connection: AdapterConnection, databaseName: string, tableName: string): Promise<TableDefinitionResult> => {
-  const pool = await getMssqlPool(connection)
-  if (databaseName) {
-    try { await pool.request().query(`USE [${databaseName}]`) } catch { /* ignore */ }
-  }
+  const pool = await getMssqlPool(connection, databaseName)
 
   const colResult = await pool.request().input('table', tableName).query<{
     column_name: string; data_type: string; max_length: number; precision: number; scale: number;
@@ -492,9 +511,6 @@ export const getMssqlTableDefinition = async (connection: AdapterConnection, dat
 }
 
 export const executeMssqlFile = async (connection: AdapterConnection, databaseName: string, sqlText: string): Promise<void> => {
-  const pool = await getMssqlPool(connection)
-  if (databaseName) {
-    try { await pool.request().query(`USE [${databaseName}]`) } catch { /* ignore */ }
-  }
+  const pool = await getMssqlPool(connection, databaseName)
   await pool.request().query(sqlText)
 }

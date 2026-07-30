@@ -1,6 +1,8 @@
 import { createClient, type ClickHouseClient } from '@clickhouse/client'
 import {
   isSelectQuery,
+  applyLimit,
+  applyLimitOffset,
   QUERY_ROW_LIMIT,
   createCursor,
   updateCursorOffset,
@@ -67,11 +69,14 @@ const filterClickHouse = (filter: TableDataFilter): string => {
 // ── ClickHouse client cache ───────────────────────────────────────────
 
 const chClients = new Map<string, ClickHouseClient>()
+const chLastAccess = new Map<string, number>()
 
 const getChClient = async (connection: AdapterConnection): Promise<ClickHouseClient> => {
-  const key = `${connection.host}:${connection.port}:${connection.username}`
+  const key = connection.id != null && connection.id > 0
+    ? `id:${connection.id}`
+    : `${connection.host}:${connection.port}:${connection.username}`
   const existing = chClients.get(key)
-  if (existing) return existing
+  if (existing) { chLastAccess.set(key, Date.now()); return existing }
 
   const protocol = connection.sslEnabled ? 'https' : 'http'
   const client = createClient({
@@ -86,15 +91,30 @@ const getChClient = async (connection: AdapterConnection): Promise<ClickHouseCli
     }
   })
   chClients.set(key, client)
+  chLastAccess.set(key, Date.now())
   return client
 }
 
 export const closeChClient = async (connection: AdapterConnection): Promise<void> => {
-  const prefix = `${connection.host}:${connection.port}:${connection.username}`
+  const prefix = connection.id != null && connection.id > 0
+    ? `id:${connection.id}`
+    : `${connection.host}:${connection.port}:${connection.username}`
   for (const [key, client] of chClients) {
-    if (key.startsWith(prefix)) {
+    if (key === prefix) {
       try { await client.close() } catch { /* ignore */ }
       chClients.delete(key)
+    }
+  }
+}
+
+/** 驱逐空闲超过 maxIdleMs 的客户端 */
+export const evictIdleChClients = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  for (const [key, client] of chClients) {
+    if (now - (chLastAccess.get(key) ?? 0) > maxIdleMs) {
+      try { await client.close() } catch { /* ignore */ }
+      chClients.delete(key)
+      chLastAccess.delete(key)
     }
   }
 }
@@ -215,24 +235,29 @@ export const executeChQuery = async (connection: AdapterConnection, databaseName
 
   try {
     const isSelect = isSelectQuery(sqlText)
-    const execSql = isSelect && !/\bLIMIT\b/i.test(sqlText) ? `${sqlText} LIMIT ${QUERY_ROW_LIMIT}` : sqlText
+    const execSql = isSelect ? applyLimit(sqlText, QUERY_ROW_LIMIT) : sqlText
 
     const result = await client.query({
       query: execSql,
-      format: 'JSONEachRow',
+      format: 'JSON',
       clickhouse_settings: databaseName ? { database: databaseName } : undefined
     })
-    const rows = await result.json() as Array<Record<string, unknown>>
+    const payload = await result.json() as {
+      meta?: Array<{ name: string }>
+      data?: Array<Record<string, unknown>>
+    }
+    const rows = payload.data ?? []
+    const columns = payload.meta?.map((column) => column.name) ?? (rows[0] ? Object.keys(rows[0]) : [])
     const endTime = new Date().toISOString()
     const durationMs = Math.round(performance.now() - startMs)
 
-    if (rows.length > 0) {
-      const columns = Object.keys(rows[0])
+    if (isSelect || columns.length > 0) {
       const truncated = isSelect && rows.length >= QUERY_ROW_LIMIT
 
       let cursorId: string | undefined
       if (truncated) {
         const cursor = createCursor({
+          connectionId: connection.id,
           engine: 'ClickHouse',
           connectionKey: `${connection.host}:${connection.port}/${databaseName}`,
           databaseName: databaseName || 'default',
@@ -294,7 +319,7 @@ export const fetchMoreChRows = async (
   count: number = QUERY_ROW_LIMIT
 ): Promise<{ rows: Array<Record<string, unknown>>; done: boolean }> => {
   const client = await getChClient(connection)
-  const limitedSql = `${cursor.sql} LIMIT ${count} OFFSET ${cursor.offset}`
+  const limitedSql = applyLimitOffset(cursor.sql, count, cursor.offset)
   const result = await client.query({
     query: limitedSql,
     format: 'JSONEachRow',

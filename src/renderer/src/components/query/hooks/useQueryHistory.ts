@@ -11,6 +11,7 @@ export interface SqlHistoryEntry {
   sql: string
   ts: number
   success: boolean
+  queryCount?: number
 }
 
 export interface UseQueryHistoryReturn {

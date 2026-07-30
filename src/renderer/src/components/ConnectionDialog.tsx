@@ -81,9 +81,10 @@ function ConnectionDialog({ editingConnection, onClose, onSaved }: ConnectionDia
   const [saving, setSaving] = useState(false)
   const [selectingFile, setSelectingFile] = useState(false)
   const [feedback, setFeedback] = useState<{ success: boolean; message: string } | null>(null)
-  const [sshExpanded, setSshExpanded] = useState(true)
-  const [sslExpanded, setSslExpanded] = useState(true)
+  const [sshExpanded, setSshExpanded] = useState(Boolean(editingConnection?.ssh?.enabled))
+  const [sslExpanded, setSslExpanded] = useState(Boolean(editingConnection?.ssl?.enabled))
   const [groups, setGroups] = useState<ConnectionGroup[]>([])
+  const isFileEngine = connection.engine === 'SQLite' || connection.engine === 'DuckDB'
 
   useEffect(() => { void window.omnidb.connections.listGroups().then(setGroups) }, [])
 
@@ -407,126 +408,145 @@ function ConnectionDialog({ editingConnection, onClose, onSaved }: ConnectionDia
             <button type="button" className="dialog-close" onClick={onClose} aria-label="关闭"><X /></button>
           </div>
 
-          <div className="dialog-body">
+          <div className="dialog-body connection-config-body">
             {feedback && <div className={`form-feedback${feedback.success ? ' success' : ' error'}`}>{feedback.message}</div>}
 
-            <label className="form-field">
-              <span>数据库类型</span>
-              <select
-                value={connection.engine}
-                onChange={(event) => {
-                  const engine = event.target.value as CreateConnectionInput['engine']
-                  const isFileEngine = engine === 'SQLite' || engine === 'DuckDB'
-                  setConnection((current) => ({
-                    ...current,
-                    engine,
-                    ...(engineDefaults[engine] ?? {}),
-                    savePassword: !isFileEngine,
-                    ssh: { ...initialConnection.ssh!, ...current.ssh, enabled: isFileEngine ? false : current.ssh?.enabled ?? false },
-                    ssl: { ...initialConnection.ssl!, ...current.ssl, enabled: isFileEngine ? false : current.ssl?.enabled ?? false }
-                  }))
-                  setFeedback(null)
-                }}
-              >
-                <optgroup label="关系型数据库 (SQL)">
-                  <option value="MySQL">MySQL</option>
-                  <option value="PostgreSQL">PostgreSQL</option>
-                  <option value="MariaDB">MariaDB</option>
-                  <option value="SQL Server">SQL Server (MSSQL)</option>
-                  <option value="Oracle">Oracle Database</option>
-                  <option value="SQLite">SQLite (本地文件)</option>
-                  <option value="TiDB">TiDB (分布式)</option>
-                </optgroup>
-                <optgroup label="国产数据库">
-                  <option value="达梦">达梦数据库 (DM)</option>
-                  <option value="人大金仓">人大金仓 (Kingbase)</option>
-                </optgroup>
-                <optgroup label="分析型 / NoSQL 数据库">
-                  <option value="ClickHouse">ClickHouse (列式 OLAP 分析数据库)</option>
-                  <option value="DuckDB">DuckDB (嵌入式 OLAP 分析数据库)</option>
-                  <option value="Redis">Redis (内存键值分析)</option>
-                  <option value="MongoDB">MongoDB (文档型 NoSQL 分析)</option>
-                  <option value="Elasticsearch">Elasticsearch (搜索引擎 / 日志分析)</option>
-                </optgroup>
-              </select>
-            </label>
-            <label className="form-field">
-              <span>连接名称</span>
-              <input autoFocus value={connection.name} onChange={(event) => update('name', event.target.value)} placeholder={`例如：本地 ${connection.engine}`} />
-            </label>
-            <label className="form-field">
-              <span>连接分组</span>
-              <select value={connection.groupId ?? ''} onChange={(event) => update('groupId', event.target.value ? Number(event.target.value) : null)}>
-                <option value="">未分组（默认）</option>
-                {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-              </select>
-            </label>
-            <div className={(connection.engine === 'SQLite' || connection.engine === 'DuckDB') ? '' : 'form-grid'}>
-              <label className="form-field host-field">
-                <span>{(connection.engine === 'SQLite' || connection.engine === 'DuckDB') ? '数据库文件路径' : '主机 / IP'}</span>
-                {(connection.engine === 'SQLite' || connection.engine === 'DuckDB') ? (
-                  <span className="sqlite-file-picker">
-                    <input readOnly value={connection.host} placeholder={`请选择 ${connection.engine} 数据库文件`} title={connection.host} />
-                    <button type="button" onClick={() => void selectSqliteFile()} disabled={selectingFile}>
-                      <FolderOpen />{selectingFile ? '选择中…' : '选择文件'}
-                    </button>
-                  </span>
-                ) : <input value={connection.host} onChange={(event) => update('host', event.target.value)} placeholder="localhost" />}
-              </label>
-              {connection.engine !== 'SQLite' && connection.engine !== 'DuckDB' && <label className="form-field port-field">
-                <span>端口</span>
-                <input type="number" min="1" max="65535" value={connection.port} onChange={(event) => update('port', Number(event.target.value))} />
-              </label>}
-            </div>
-            {connection.engine !== 'SQLite' && connection.engine !== 'DuckDB' && <label className="form-field">
-              <span>默认数据库 / SID / Schema</span>
-              <input value={connection.defaultDatabase} onChange={(event) => update('defaultDatabase', event.target.value)} placeholder="留空或输入默认数据库" />
-            </label>}
-            {connection.engine !== 'SQLite' && connection.engine !== 'DuckDB' && <label className="form-field">
-              <span>用户名</span>
-              <input value={connection.username} onChange={(event) => update('username', event.target.value)} />
-            </label>}
-            {connection.engine !== 'SQLite' && connection.engine !== 'DuckDB' && <label className="form-field">
-              <span>密码</span>
-              <span className="password-input">
-                <input type={showPassword ? 'text' : 'password'} value={connection.password} onChange={(event) => update('password', event.target.value)} placeholder={editing ? '留空表示继续使用原密码' : '请输入数据库密码'} />
-                <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label="显示或隐藏密码">
-                  {showPassword ? <EyeSlash /> : <Eye />}
-                </button>
-              </span>
-            </label>}
-            {connection.engine !== 'SQLite' && connection.engine !== 'DuckDB' && <label className="save-password">
-              <input type="checkbox" checked={connection.savePassword} onChange={(event) => update('savePassword', event.target.checked)} />
-              <span>安全保存密码</span>
-            </label>}
-            {connection.engine !== 'SQLite' && connection.engine !== 'DuckDB' && <section className={`connection-security-panel${connection.ssh?.enabled ? ' enabled' : ''}`}>
-              <div className="connection-security-heading" role="button" tabIndex={0} onClick={() => setSshExpanded((current) => !current)} onKeyDown={(event) => (event.key === 'Enter' || event.key === ' ') && setSshExpanded((current) => !current)}>
-                {sshExpanded ? <CaretDown /> : <CaretRight />}<Key /><span><strong>SSH 隧道</strong><small>通过 SSH 转发数据库连接</small></span>
-                <label className="security-switch" onClick={(event) => event.stopPropagation()}>
-                  <input type="checkbox" checked={connection.ssh?.enabled ?? false} onChange={(event) => { updateSsh('enabled', event.target.checked); setSshExpanded(event.target.checked || sshExpanded) }} />
-                  <i />
+            <section className="connection-form-section">
+              <header><Database weight="fill" /><div><strong>基础信息</strong><span>选择数据库类型并命名当前连接</span></div></header>
+              <div className="connection-two-grid">
+                <label className="form-field">
+                  <span>数据库类型</span>
+                  <select
+                    value={connection.engine}
+                    onChange={(event) => {
+                      const engine = event.target.value as CreateConnectionInput['engine']
+                      const nextIsFileEngine = engine === 'SQLite' || engine === 'DuckDB'
+                      setConnection((current) => ({
+                        ...current,
+                        engine,
+                        ...(engineDefaults[engine] ?? {}),
+                        savePassword: !nextIsFileEngine,
+                        ssh: { ...initialConnection.ssh!, ...current.ssh, enabled: nextIsFileEngine ? false : current.ssh?.enabled ?? false },
+                        ssl: { ...initialConnection.ssl!, ...current.ssl, enabled: nextIsFileEngine ? false : current.ssl?.enabled ?? false }
+                      }))
+                      setFeedback(null)
+                    }}
+                  >
+                    <optgroup label="关系型数据库 (SQL)">
+                      <option value="MySQL">MySQL</option>
+                      <option value="PostgreSQL">PostgreSQL</option>
+                      <option value="MariaDB">MariaDB</option>
+                      <option value="SQL Server">SQL Server (MSSQL)</option>
+                      <option value="Oracle">Oracle Database</option>
+                      <option value="SQLite">SQLite (本地文件)</option>
+                      <option value="TiDB">TiDB (分布式)</option>
+                    </optgroup>
+                    <optgroup label="国产数据库">
+                      <option value="达梦">达梦数据库 (DM)</option>
+                      <option value="人大金仓">人大金仓 (Kingbase)</option>
+                    </optgroup>
+                    <optgroup label="分析型 / NoSQL 数据库">
+                      <option value="ClickHouse">ClickHouse (列式 OLAP 分析数据库)</option>
+                      <option value="DuckDB">DuckDB (嵌入式 OLAP 分析数据库)</option>
+                      <option value="Redis">Redis (内存键值分析)</option>
+                      <option value="MongoDB">MongoDB (文档型 NoSQL 分析)</option>
+                      <option value="Elasticsearch">Elasticsearch (搜索引擎 / 日志分析)</option>
+                    </optgroup>
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span>连接名称</span>
+                  <input autoFocus value={connection.name} onChange={(event) => update('name', event.target.value)} placeholder={`例如：本地 ${connection.engine}`} />
                 </label>
               </div>
-              {sshExpanded && <div className="connection-security-content">
-                <div className="form-grid"><label className="form-field host-field"><span>SSH 主机</span><input value={connection.ssh?.host ?? ''} onChange={(event) => updateSsh('host', event.target.value)} /></label>
-                  <label className="form-field port-field"><span>端口</span><input type="number" min="1" max="65535" value={connection.ssh?.port ?? 22} onChange={(event) => updateSsh('port', Number(event.target.value))} /></label></div>
-                <label className="form-field"><span>SSH 用户名</span><input value={connection.ssh?.username ?? ''} onChange={(event) => updateSsh('username', event.target.value)} /></label>
-                <label className="form-field"><span>认证方式</span><select value={connection.ssh?.authType ?? 'password'} onChange={(event) => updateSsh('authType', event.target.value as SshConfig['authType'])}><option value="password">密码</option><option value="privateKey">私钥文件</option></select></label>
-                {connection.ssh?.authType === 'privateKey' ? <>
-                  <label className="form-field"><span>私钥文件</span><span className="sqlite-file-picker"><input readOnly value={connection.ssh.privateKeyPath ?? ''} placeholder="选择私钥文件" /><button type="button" onClick={() => void selectSecurityFile('sshPrivateKey', 'sshPrivateKeyPath')}><FolderOpen />选择</button></span></label>
-                  <label className="form-field"><span>私钥密码（可选）</span><input type="password" value={connection.ssh.passphrase ?? ''} placeholder={editing ? '留空表示保留原密码' : ''} onChange={(event) => updateSsh('passphrase', event.target.value)} /></label>
-                </> : <label className="form-field"><span>SSH 密码</span><input type="password" value={connection.ssh?.password ?? ''} placeholder={editing ? '留空表示保留原密码' : ''} onChange={(event) => updateSsh('password', event.target.value)} /></label>}
-              </div>}
-            </section>}
-            {connection.engine !== 'SQLite' && <section className={`connection-security-panel${connection.ssl?.enabled ? ' enabled' : ''}`}>
-              <div className="connection-security-heading" role="button" tabIndex={0} onClick={() => setSslExpanded((current) => !current)} onKeyDown={(event) => (event.key === 'Enter' || event.key === ' ') && setSslExpanded((current) => !current)}>
-                {sslExpanded ? <CaretDown /> : <CaretRight />}<ShieldCheck /><span><strong>SSL/TLS</strong><small>加密客户端与数据库之间的连接</small></span>
-                <label className="security-switch" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={connection.ssl?.enabled ?? false} onChange={(event) => { updateSsl('enabled', event.target.checked); setSslExpanded(event.target.checked || sslExpanded) }} /><i /></label>
+              <label className="form-field">
+                <span>连接分组</span>
+                <select value={connection.groupId ?? ''} onChange={(event) => update('groupId', event.target.value ? Number(event.target.value) : null)}>
+                  <option value="">未分组（默认）</option>
+                  {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
+              </label>
+            </section>
+
+            <section className="connection-form-section">
+              <header><Plug weight="fill" /><div><strong>{isFileEngine ? '文件位置' : '地址与认证'}</strong><span>{isFileEngine ? '选择本地数据库文件' : '填写数据库服务地址和登录凭据'}</span></div></header>
+              <div className={isFileEngine ? '' : 'form-grid'}>
+                <label className="form-field host-field">
+                  <span>{isFileEngine ? '数据库文件路径' : '主机 / IP'}</span>
+                  {isFileEngine ? (
+                    <span className="sqlite-file-picker">
+                      <input readOnly value={connection.host} placeholder={`请选择 ${connection.engine} 数据库文件`} title={connection.host} />
+                      <button type="button" onClick={() => void selectSqliteFile()} disabled={selectingFile}>
+                        <FolderOpen />{selectingFile ? '选择中…' : '选择文件'}
+                      </button>
+                    </span>
+                  ) : <input value={connection.host} onChange={(event) => update('host', event.target.value)} placeholder="localhost" />}
+                </label>
+                {!isFileEngine && <label className="form-field port-field">
+                  <span>端口</span>
+                  <input type="number" min="1" max="65535" value={connection.port} onChange={(event) => update('port', Number(event.target.value))} />
+                </label>}
               </div>
-              {sslExpanded && <div className="connection-security-content">
-                <label className="save-password"><input type="checkbox" checked={connection.ssl?.rejectUnauthorized === false} onChange={(event) => updateSsl('rejectUnauthorized', !event.target.checked)} /><span>跳过服务器证书验证（仅开发环境）</span></label>
-                {([['CA 证书', 'sslCa', 'sslCaPath', 'caPath'], ['客户端证书', 'sslCert', 'sslCertPath', 'certPath'], ['客户端私钥', 'sslKey', 'sslKeyPath', 'keyPath']] as const).map(([label, kind, target, key]) => <label className="form-field" key={key}><span>{label}（可选）</span><span className="sqlite-file-picker"><input readOnly value={connection.ssl?.[key] ?? ''} /><button type="button" onClick={() => void selectSecurityFile(kind, target)}><FolderOpen />选择</button></span></label>)}
+              {!isFileEngine && <div className="connection-two-grid">
+                <label className="form-field">
+                  <span>默认数据库 / SID / Schema</span>
+                  <input value={connection.defaultDatabase} onChange={(event) => update('defaultDatabase', event.target.value)} placeholder="留空或输入默认数据库" />
+                </label>
+                <label className="form-field">
+                  <span>用户名</span>
+                  <input value={connection.username} onChange={(event) => update('username', event.target.value)} />
+                </label>
               </div>}
+              {!isFileEngine && <div className="connection-auth-row">
+                <label className="form-field">
+                  <span>密码</span>
+                  <span className="password-input">
+                    <input type={showPassword ? 'text' : 'password'} value={connection.password} onChange={(event) => update('password', event.target.value)} placeholder={editing ? '留空表示继续使用原密码' : '请输入数据库密码'} />
+                    <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label="显示或隐藏密码">
+                      {showPassword ? <EyeSlash /> : <Eye />}
+                    </button>
+                  </span>
+                </label>
+                <label className="save-password">
+                  <input type="checkbox" checked={connection.savePassword} onChange={(event) => update('savePassword', event.target.checked)} />
+                  <span>安全保存密码</span>
+                </label>
+              </div>}
+            </section>
+
+            {!isFileEngine && <section className="connection-form-section">
+              <header><ShieldCheck weight="fill" /><div><strong>高级安全</strong><span>按需开启 SSH 隧道或 SSL/TLS 加密</span></div></header>
+              {!isFileEngine && <section className={`connection-security-panel${connection.ssh?.enabled ? ' enabled' : ''}`}>
+                <div className="connection-security-heading" role="button" tabIndex={0} onClick={() => setSshExpanded((current) => !current)} onKeyDown={(event) => (event.key === 'Enter' || event.key === ' ') && setSshExpanded((current) => !current)}>
+                  {sshExpanded ? <CaretDown /> : <CaretRight />}<Key /><span><strong>SSH 隧道</strong><small>通过 SSH 转发数据库连接</small></span>
+                  <label className="security-switch" onClick={(event) => event.stopPropagation()}>
+                    <input type="checkbox" checked={connection.ssh?.enabled ?? false} onChange={(event) => { updateSsh('enabled', event.target.checked); setSshExpanded(event.target.checked) }} />
+                    <i />
+                  </label>
+                </div>
+                {sshExpanded && <div className="connection-security-content">
+                  <div className="form-grid"><label className="form-field host-field"><span>SSH 主机</span><input value={connection.ssh?.host ?? ''} onChange={(event) => updateSsh('host', event.target.value)} /></label>
+                    <label className="form-field port-field"><span>端口</span><input type="number" min="1" max="65535" value={connection.ssh?.port ?? 22} onChange={(event) => updateSsh('port', Number(event.target.value))} /></label></div>
+                  <div className="connection-two-grid">
+                    <label className="form-field"><span>SSH 用户名</span><input value={connection.ssh?.username ?? ''} onChange={(event) => updateSsh('username', event.target.value)} /></label>
+                    <label className="form-field"><span>认证方式</span><select value={connection.ssh?.authType ?? 'password'} onChange={(event) => updateSsh('authType', event.target.value as SshConfig['authType'])}><option value="password">密码</option><option value="privateKey">私钥文件</option></select></label>
+                  </div>
+                  {connection.ssh?.authType === 'privateKey' ? <>
+                    <label className="form-field"><span>私钥文件</span><span className="sqlite-file-picker"><input readOnly value={connection.ssh.privateKeyPath ?? ''} placeholder="选择私钥文件" /><button type="button" onClick={() => void selectSecurityFile('sshPrivateKey', 'sshPrivateKeyPath')}><FolderOpen />选择</button></span></label>
+                    <label className="form-field"><span>私钥密码（可选）</span><input type="password" value={connection.ssh.passphrase ?? ''} placeholder={editing ? '留空表示保留原密码' : ''} onChange={(event) => updateSsh('passphrase', event.target.value)} /></label>
+                  </> : <label className="form-field"><span>SSH 密码</span><input type="password" value={connection.ssh?.password ?? ''} placeholder={editing ? '留空表示保留原密码' : ''} onChange={(event) => updateSsh('password', event.target.value)} /></label>}
+                </div>}
+              </section>}
+              {connection.engine !== 'SQLite' && <section className={`connection-security-panel${connection.ssl?.enabled ? ' enabled' : ''}`}>
+                <div className="connection-security-heading" role="button" tabIndex={0} onClick={() => setSslExpanded((current) => !current)} onKeyDown={(event) => (event.key === 'Enter' || event.key === ' ') && setSslExpanded((current) => !current)}>
+                  {sslExpanded ? <CaretDown /> : <CaretRight />}<ShieldCheck /><span><strong>SSL/TLS</strong><small>加密客户端与数据库之间的连接</small></span>
+                  <label className="security-switch" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={connection.ssl?.enabled ?? false} onChange={(event) => { updateSsl('enabled', event.target.checked); setSslExpanded(event.target.checked) }} /><i /></label>
+                </div>
+                {sslExpanded && <div className="connection-security-content">
+                  <label className="save-password"><input type="checkbox" checked={connection.ssl?.rejectUnauthorized === false} onChange={(event) => updateSsl('rejectUnauthorized', !event.target.checked)} /><span>跳过服务器证书验证（仅开发环境）</span></label>
+                  {([['CA 证书', 'sslCa', 'sslCaPath', 'caPath'], ['客户端证书', 'sslCert', 'sslCertPath', 'certPath'], ['客户端私钥', 'sslKey', 'sslKeyPath', 'keyPath']] as const).map(([label, kind, target, key]) => <label className="form-field" key={key}><span>{label}（可选）</span><span className="sqlite-file-picker"><input readOnly value={connection.ssl?.[key] ?? ''} /><button type="button" onClick={() => void selectSecurityFile(kind, target)}><FolderOpen />选择</button></span></label>)}
+                </div>}
+              </section>}
             </section>}
           </div>
 

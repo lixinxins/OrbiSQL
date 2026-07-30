@@ -10,21 +10,22 @@ import { readFile, stat as fsStat } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { ConnectionRepository } from './database/connection-repository'
-import { AiAgentService } from './services/ai-agent-service'
 import { ConnectionService } from './services/connection-service'
-import { SshService } from './services/ssh-service'
-import { closeAllPostgresPools } from './services/adapters/postgresql-adapter'
-import { ImportExportService } from './services/import-export-service'
 import { expectInt, expectString, expectBool, expectObject, expectOptionalInt, expectOptionalString, expectOneOf } from './services/ipc-validators'
 import { transactionManager } from './services/transaction-manager'
 import { shutdownDbQueryWorker } from './services/db-query-runtime'
 import { shutdownSqliteWorker } from './services/sqlite-runtime'
+import { MemoryMonitorService } from './services/memory-monitor-service'
+import { connectionEvictionScheduler } from './services/connection-eviction-scheduler'
 import type { AiAgentRequest, AiExecuteProposalRequest, AiSaveModelInput } from '../shared/ai-agent'
 import type { AppLanguage, AppPreferences, ConnectionSecurityFileKind, CopyTableInput, CreateConnectionInput, CreateTableInput, DatabaseDefinitionInput, ExecuteImportInput, ExecuteSqlFileInput, ExportTableCustomInput, QueryDeleteRowInput, QueryUpdateRowInput, RenameTableInput, SaveQueryInput, TableDataFilter, TransferTableDataInput, UpdateConnectionInput, UpdateDatabaseInput, UpdateTableInput } from '../shared/connections'
 import type { SshFileEntry } from '../shared/ssh-files'
 import { IpcChannel } from '../shared/ipc-channels'
 
 const PRODUCT_NAME = 'QuillDB'
+type AiAgentServiceType = import('./services/ai-agent-service').AiAgentService
+type ImportExportServiceType = import('./services/import-export-service').ImportExportService
+type SshServiceType = import('./services/ssh-service').SshService
 // 保留旧版数据目录，升级品牌后继续使用用户已有的连接、查询和偏好设置。
 app.setPath('userData', join(app.getPath('appData'), 'omnidb'))
 const preferencesPath = join(app.getPath('userData'), 'preferences.json')
@@ -47,6 +48,18 @@ const showAboutDialog = (): void => {
 }
 
 app.commandLine.appendSwitch('lang', applicationLanguage)
+// 内存与内核启动优化：禁用 GPU 硬件加速以节省 GPU / 渲染进程显存及物理内存占用 (~30-60MB)
+app.disableHardwareAcceleration()
+app.commandLine.appendSwitch('disable-gpu')
+
+// 内核启动提速：禁用冗余插件、浏览器扩展和后台网络轮询，减少 Chromium 内核初始化耗时
+app.commandLine.appendSwitch('disable-plugins')
+app.commandLine.appendSwitch('disable-extensions')
+app.commandLine.appendSwitch('disable-background-networking')
+
+// V8 内存优化：暴露 GC 接口以便 MemoryMonitor 可主动触发垃圾回收，
+// 限制堆上限防止主进程 OOM，--optimize-for-size 优先回收内存而非速度
+app.commandLine.appendSwitch('js-flags', '--expose-gc --max-old-space-size=512 --optimize-for-size')
 app.setName(PRODUCT_NAME)
 process.title = PRODUCT_NAME
 app.setAppUserModelId('com.quilldb.desktop')
@@ -129,7 +142,6 @@ const createApplicationMenu = (): void => {
       submenu: [
         { label: label('重新加载', 'Reload'), role: 'reload' },
         { label: label('强制重新加载', 'Force Reload'), role: 'forceReload' },
-        { label: label('开发者工具', 'Developer Tools'), role: 'toggleDevTools' },
         { type: 'separator' },
         { label: label('实际大小', 'Actual Size'), role: 'resetZoom' },
         { label: label('放大', 'Zoom In'), role: 'zoomIn' },
@@ -197,13 +209,17 @@ const createWindow = (): void => {
     show: false,
     title: PRODUCT_NAME,
     icon: getApplicationIconPath(),
-    backgroundColor: '#f7f8fa',
+    backgroundColor: '#f8fafc',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      devTools: false,
+      // 后台节流：窗口最小化或隐藏时，Electron 自动降低 requestAnimationFrame 频率、
+      // 暂停 setTimeout/setInterval，减少渲染进程 CPU 与内存消耗
+      backgroundThrottling: true
     }
   })
 
@@ -223,11 +239,38 @@ const createWindow = (): void => {
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.setIcon(nativeImage.createFromPath(getApplicationIconPath()))
+
+  // 1. 优先创建主窗口，开启 UI 渲染流程
+  createWindow()
+
   const connectionRepository = new ConnectionRepository(join(app.getPath('userData'), 'omnidb.sqlite'))
   const connectionService = new ConnectionService(connectionRepository)
-  const importExportService = new ImportExportService(connectionService)
-  const aiAgentService = new AiAgentService(connectionService, connectionRepository)
-  const sshService = new SshService(connectionRepository)
+  let importExportService: ImportExportServiceType | null = null
+  let aiAgentService: AiAgentServiceType | null = null
+  let sshService: SshServiceType | null = null
+  let memoryMonitor: MemoryMonitorService | null = null
+
+  const getImportExportService = async (): Promise<ImportExportServiceType> => {
+    if (!importExportService) {
+      const { ImportExportService } = await import('./services/import-export-service')
+      importExportService = new ImportExportService(connectionService)
+    }
+    return importExportService
+  }
+  const getAiAgentService = async (): Promise<AiAgentServiceType> => {
+    if (!aiAgentService) {
+      const { AiAgentService } = await import('./services/ai-agent-service')
+      aiAgentService = new AiAgentService(connectionService, connectionRepository)
+    }
+    return aiAgentService
+  }
+  const getSshService = async (): Promise<SshServiceType> => {
+    if (!sshService) {
+      const { SshService } = await import('./services/ssh-service')
+      sshService = new SshService(connectionRepository)
+    }
+    return sshService
+  }
 
   createApplicationMenu()
 
@@ -255,17 +298,18 @@ app.whenReady().then(() => {
     expectString(filePath, 'filePath')
     if (filePath) void shell.openPath(filePath as string)
   })
-  ipcMain.handle(IpcChannel.ai.listModelPresets, () => aiAgentService.listModelPresets())
-  ipcMain.handle(IpcChannel.ai.listModels, () => aiAgentService.listModels())
-  ipcMain.handle(IpcChannel.ai.saveModel, (_event, input: unknown) => { expectObject(input, 'input'); return aiAgentService.saveModel(input as AiSaveModelInput) })
-  ipcMain.handle(IpcChannel.ai.deleteModel, (_event, id: unknown) => { expectInt(id, 'id'); return aiAgentService.deleteModel(id as number) })
-  ipcMain.handle(IpcChannel.ai.chat, (_event, request: unknown) => { expectObject(request, 'request'); return aiAgentService.chat(request as AiAgentRequest) })
-  ipcMain.handle(IpcChannel.ai.executeProposal, (_event, request: unknown) => { expectObject(request, 'request'); return aiAgentService.executeProposal(request as AiExecuteProposalRequest) })
+  ipcMain.handle(IpcChannel.ai.listModelPresets, async () => (await getAiAgentService()).listModelPresets())
+  ipcMain.handle(IpcChannel.ai.listModels, async () => (await getAiAgentService()).listModels())
+  ipcMain.handle(IpcChannel.ai.saveModel, async (_event, input: unknown) => { expectObject(input, 'input'); return (await getAiAgentService()).saveModel(input as AiSaveModelInput) })
+  ipcMain.handle(IpcChannel.ai.deleteModel, async (_event, id: unknown) => { expectInt(id, 'id'); return (await getAiAgentService()).deleteModel(id as number) })
+  ipcMain.handle(IpcChannel.ai.chat, async (_event, request: unknown) => { expectObject(request, 'request'); return (await getAiAgentService()).chat(request as AiAgentRequest) })
+  ipcMain.handle(IpcChannel.ai.executeProposal, async (_event, request: unknown) => { expectObject(request, 'request'); return (await getAiAgentService()).executeProposal(request as AiExecuteProposalRequest) })
   ipcMain.handle(IpcChannel.connections.list, () => connectionService.list())
   ipcMain.handle(IpcChannel.connections.getOne, (_event, id: unknown) => { expectInt(id, 'id'); return connectionService.getOne(id as number) })
   ipcMain.handle(IpcChannel.connections.listGroups, () => connectionService.listConnectionGroups())
   ipcMain.handle(IpcChannel.connections.createGroup, (_event, name: unknown, category?: unknown) => { expectString(name, 'name'); return connectionService.createConnectionGroup(name as string, (category as 'database' | 'ssh') || 'database') })
   ipcMain.handle(IpcChannel.connections.deleteGroup, (_event, id: unknown) => { expectInt(id, 'id'); return connectionService.deleteConnectionGroup(id as number) })
+  ipcMain.handle(IpcChannel.connections.renameGroup, (_event, id: unknown, name: unknown) => { expectInt(id, 'id'); expectString(name, 'name'); return connectionService.renameConnectionGroup(id as number, name as string) })
   ipcMain.handle(IpcChannel.connections.setGroup, (_event, connectionId: unknown, groupId: unknown) => {
     expectInt(connectionId, 'connectionId')
     expectOptionalInt(groupId, 'groupId')
@@ -472,9 +516,9 @@ app.whenReady().then(() => {
     const progressCallback = (progress: { current: number; total: number; tableName?: string; message: string }): void => {
       event.sender.send(IpcChannel.databases.exportSqlProgress, progress)
     }
-    return importExportService.exportSql(connId, dbName, selected.filePath, withData, tblName, progressCallback)
+    return (await getImportExportService()).exportSql(connId, dbName, selected.filePath, withData, tblName, progressCallback)
   })
-  ipcMain.handle(IpcChannel.databases.previewExportSql, (
+  ipcMain.handle(IpcChannel.databases.previewExportSql, async (
     _event,
     connectionId: unknown,
     databaseName: unknown,
@@ -487,7 +531,7 @@ app.whenReady().then(() => {
     expectOptionalString(tableName, 'tableName')
     expectBool(includeData, 'includeData')
     const rowsLimit = typeof maxRowsPerTable === 'number' ? maxRowsPerTable : 50
-    return importExportService.previewExportSql(
+    return (await getImportExportService()).previewExportSql(
       connectionId as number,
       databaseName as string,
       includeData as boolean,
@@ -574,7 +618,7 @@ app.whenReady().then(() => {
     return connectionService.truncateTable(connectionId as number, databaseName as string, tableName as string)
   })
   ipcMain.handle(IpcChannel.tables.copy, (_event, input: unknown) => { expectObject(input, 'input'); return connectionService.copyTable(input as CopyTableInput) })
-  ipcMain.handle(IpcChannel.tables.transferData, (_event, input: unknown) => { expectObject(input, 'input'); return importExportService.transferTableData(input as TransferTableDataInput) })
+  ipcMain.handle(IpcChannel.tables.transferData, async (_event, input: unknown) => { expectObject(input, 'input'); return (await getImportExportService()).transferTableData(input as TransferTableDataInput) })
   ipcMain.handle(IpcChannel.tables.previewImport, async (
     _event,
     connectionId: unknown,
@@ -607,16 +651,16 @@ app.whenReady().then(() => {
       targetFilePath = selected.filePaths[0]
     }
 
-    return importExportService.previewImportFile(connId, dbName, tblName, targetFilePath)
+    return (await getImportExportService()).previewImportFile(connId, dbName, tblName, targetFilePath)
   })
 
-  ipcMain.handle(IpcChannel.tables.executeImport, (_event, input: unknown) => {
+  ipcMain.handle(IpcChannel.tables.executeImport, async (_event, input: unknown) => {
     expectObject(input, 'input')
-    return importExportService.executeImportWithMapping(input as ExecuteImportInput)
+    return (await getImportExportService()).executeImportWithMapping(input as ExecuteImportInput)
   })
-  ipcMain.handle(IpcChannel.tables.exportCustomData, (_event, input: unknown) => {
+  ipcMain.handle(IpcChannel.tables.exportCustomData, async (_event, input: unknown) => {
     expectObject(input, 'input')
-    return importExportService.exportTableCustom(input as ExportTableCustomInput)
+    return (await getImportExportService()).exportTableCustom(input as ExportTableCustomInput)
   })
   ipcMain.handle(IpcChannel.tables.importCsv, async (_event, connectionId: unknown, databaseName: unknown, tableName: unknown) => {
     expectInt(connectionId, 'connectionId')
@@ -627,7 +671,7 @@ app.whenReady().then(() => {
     const tblName = tableName as string
     const selected = await dialog.showOpenDialog({ title: `导入到 ${dbName}.${tblName}`, properties: ['openFile'], filters: [{ name: '数据文件', extensions: ['csv', 'json', 'xlsx', 'xls'] }] })
     if (selected.canceled || !selected.filePaths[0]) return { success: false, message: '已取消导入' }
-    return importExportService.importTableData(connId, dbName, tblName, selected.filePaths[0])
+    return (await getImportExportService()).importTableData(connId, dbName, tblName, selected.filePaths[0])
   })
   ipcMain.handle(IpcChannel.tables.exportCsv, async (
     _event,
@@ -647,32 +691,32 @@ app.whenReady().then(() => {
       filters: [{ name: 'CSV 文件', extensions: ['csv'] }]
     })
     if (selected.canceled || !selected.filePath) return { success: false, message: '已取消导出' }
-    return importExportService.exportTableCsv(connId, dbName, tblName, selected.filePath)
+    return (await getImportExportService()).exportTableCsv(connId, dbName, tblName, selected.filePath)
   })
 
   ipcMain.handle(IpcChannel.ssh.connect, async (event, options: unknown) => {
     expectObject(options, 'options')
-    return sshService.connect(options as Parameters<typeof sshService.connect>[0], event.sender)
+    return (await getSshService()).connect(options as Parameters<SshServiceType['connect']>[0], event.sender)
   })
-  ipcMain.handle(IpcChannel.ssh.write, (_event, sessionId: unknown, data: unknown) => {
+  ipcMain.handle(IpcChannel.ssh.write, async (_event, sessionId: unknown, data: unknown) => {
     expectString(sessionId, 'sessionId')
     expectString(data, 'data')
-    return sshService.write(sessionId as string, data as string)
+    return (await getSshService()).write(sessionId as string, data as string)
   })
-  ipcMain.handle(IpcChannel.ssh.resize, (_event, sessionId: unknown, rows: unknown, cols: unknown) => {
+  ipcMain.handle(IpcChannel.ssh.resize, async (_event, sessionId: unknown, rows: unknown, cols: unknown) => {
     expectString(sessionId, 'sessionId')
     expectInt(rows, 'rows')
     expectInt(cols, 'cols')
-    return sshService.resize(sessionId as string, rows as number, cols as number)
+    return (await getSshService()).resize(sessionId as string, rows as number, cols as number)
   })
-  ipcMain.handle(IpcChannel.ssh.disconnect, (_event, sessionId: unknown) => {
+  ipcMain.handle(IpcChannel.ssh.disconnect, async (_event, sessionId: unknown) => {
     expectString(sessionId, 'sessionId')
-    return sshService.disconnect(sessionId as string)
+    return (await getSshService()).disconnect(sessionId as string)
   })
-  ipcMain.handle(IpcChannel.ssh.filesList, (_event, sessionId: unknown, remotePath: unknown) => {
+  ipcMain.handle(IpcChannel.ssh.filesList, async (_event, sessionId: unknown, remotePath: unknown) => {
     expectString(sessionId, 'sessionId')
     expectString(remotePath, 'remotePath')
-    return sshService.listFiles(sessionId as string, remotePath as string)
+    return (await getSshService()).listFiles(sessionId as string, remotePath as string)
   })
   ipcMain.handle(IpcChannel.ssh.filesUpload, async (event, sessionId: unknown, remoteDirectory: unknown) => {
     expectString(sessionId, 'sessionId')
@@ -685,7 +729,7 @@ app.whenReady().then(() => {
       properties: ['openFile', 'multiSelections']
     })
     if (selected.canceled || !selected.filePaths.length) return { success: false, message: '已取消上传', canceled: true }
-    return sshService.uploadFiles(sessId, remoteDir, selected.filePaths)
+    return (await getSshService()).uploadFiles(sessId, remoteDir, selected.filePaths)
   })
   ipcMain.handle(IpcChannel.ssh.filesDownload, async (event, sessionId: unknown, remotePath: unknown, fileName: unknown) => {
     expectString(sessionId, 'sessionId')
@@ -700,7 +744,7 @@ app.whenReady().then(() => {
       defaultPath: fName || basename(rPath)
     })
     if (selected.canceled || !selected.filePath) return { success: false, message: '已取消下载', canceled: true }
-    return sshService.downloadFile(sessId, rPath, selected.filePath)
+    return (await getSshService()).downloadFile(sessId, rPath, selected.filePath)
   })
   ipcMain.handle(IpcChannel.ssh.filesOpen, async (_event, sessionId: unknown, remotePath: unknown, fileName: unknown) => {
     expectString(sessionId, 'sessionId')
@@ -720,7 +764,7 @@ app.whenReady().then(() => {
         localPath = join(downloadDirectory, `${stem} (${copyIndex})${extension}`)
         copyIndex += 1
       }
-      const downloaded = await sshService.downloadFile(sessId, rPath, localPath)
+      const downloaded = await (await getSshService()).downloadFile(sessId, rPath, localPath)
       if (!downloaded.success) return downloaded
       const openError = await shell.openPath(localPath)
       if (openError) {
@@ -732,14 +776,45 @@ app.whenReady().then(() => {
       return { success: false, message: `下载并打开文件失败：${error instanceof Error ? error.message : String(error)}` }
     }
   })
-  ipcMain.handle(IpcChannel.ssh.filesDelete, (_event, sessionId: unknown, remotePath: unknown, type: unknown) => {
+  ipcMain.handle(IpcChannel.ssh.filesDelete, async (_event, sessionId: unknown, remotePath: unknown, type: unknown) => {
     expectString(sessionId, 'sessionId')
     expectString(remotePath, 'remotePath')
     expectOneOf(type, ['file', 'directory'] as const, 'type')
-    return sshService.deleteFile(sessionId as string, remotePath as string, type as SshFileEntry['type'])
+    return (await getSshService()).deleteFile(sessionId as string, remotePath as string, type as SshFileEntry['type'])
   })
 
-  createWindow()
+  // ── Memory diagnostics IPC ──────────────────────────────
+  ipcMain.handle(IpcChannel.memory.getStats, () => memoryMonitor?.getMemoryStats() ?? null)
+  ipcMain.handle(IpcChannel.memory.takeHeapSnapshot, () => memoryMonitor?.takeHeapSnapshot() ?? null)
+  ipcMain.handle(IpcChannel.memory.forceGc, () => {
+    if (typeof global.gc === 'function') {
+      try { global.gc(); return { success: true, message: 'GC 已执行' } }
+      catch (e) { return { success: false, message: `GC 执行失败：${e instanceof Error ? e.message : String(e)}` } }
+    }
+    return { success: false, message: 'GC 不可用，请确认 --expose-gc 启动参数' }
+  })
+  ipcMain.handle(IpcChannel.workspace.getStats, (_event, range?: unknown) =>
+    connectionRepository.getWorkspaceStats(range === '30d' || range === '90d' ? range : '7d')
+  )
+
+  // 2. 延迟启动非核心后台逻辑（内存监控、连接池清理调度器），不阻塞窗口创建及首屏渲染
+  setTimeout(() => {
+    memoryMonitor = new MemoryMonitorService(() => {
+      // 超阈值时主动触发 GC 并清理空闲连接池
+      if (typeof global.gc === 'function') {
+        try { global.gc() } catch { /* ignore */ }
+      }
+      void import('./services/adapters/postgresql-adapter')
+        .then(({ closeAllPostgresPools }) => closeAllPostgresPools())
+        .catch(() => {})
+      void connectionEvictionScheduler.evictAll(0).catch(() => {})
+      console.warn('[MemoryMonitor] Threshold exceeded — GC triggered and idle connections evicted.')
+    })
+    memoryMonitor.start()
+
+    // 启动连接池空闲驱逐调度器（每 5 分钟检查，关闭空闲超过 15 分钟的连接池）
+    connectionEvictionScheduler.start()
+  }, 1000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -752,10 +827,11 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', (event) => {
   event.preventDefault()
+  connectionEvictionScheduler.stop()
   Promise.allSettled([
     transactionManager.shutdown(),
     shutdownDbQueryWorker(),
     shutdownSqliteWorker(),
-    closeAllPostgresPools()
+    import('./services/adapters/postgresql-adapter').then(({ closeAllPostgresPools }) => closeAllPostgresPools())
   ]).finally(() => app.exit(0))
 })

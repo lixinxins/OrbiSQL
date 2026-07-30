@@ -155,6 +155,62 @@ export class ImportExportService {
     }
   }
 
+  /**
+   * 流式 JSON 导入：逐字符扫描提取顶层数组元素，按批插入，
+   * 避免大 JSON 文件一次性 JSON.parse 导致 OOM。
+   */
+  private async importJsonStreaming(
+    connection: StoredConnection,
+    databaseName: string,
+    tableName: string,
+    filePath: string
+  ): Promise<{ totalInserted: number }> {
+    const content = await readFile(filePath, 'utf8')
+    const arrayStart = content.indexOf('[')
+    if (arrayStart === -1) return { totalInserted: 0 }
+
+    const BATCH_SIZE = 500
+    let batch: Array<Record<string, unknown>> = []
+    let totalInserted = 0
+    let headers: string[] | null = null
+    let depth = 0
+    let inString = false
+    let escaped = false
+    let objStart = -1
+
+    for (let i = arrayStart + 1; i < content.length; i++) {
+      const c = content[i]
+      if (escaped) { escaped = false; continue }
+      if (c === '\\' && inString) { escaped = true; continue }
+      if (c === '"') { inString = !inString; continue }
+      if (inString) continue
+
+      if (c === '{') {
+        if (depth === 0) objStart = i
+        depth++
+      } else if (c === '}') {
+        depth--
+        if (depth === 0 && objStart >= 0) {
+          const obj = JSON.parse(content.slice(objStart, i + 1)) as Record<string, unknown>
+          if (headers === null) headers = Object.keys(obj)
+          batch.push(obj)
+          if (batch.length >= BATCH_SIZE) {
+            await this.executeParamBatchInsert(connection, databaseName, tableName, headers, batch)
+            totalInserted += batch.length
+            batch = []
+          }
+          objStart = -1
+        }
+      }
+    }
+
+    if (batch.length > 0 && headers) {
+      await this.executeParamBatchInsert(connection, databaseName, tableName, headers, batch)
+      totalInserted += batch.length
+    }
+    return { totalInserted }
+  }
+
   async importTableData(
     connectionId: number,
     databaseName: string,
@@ -244,13 +300,9 @@ export class ImportExportService {
       // ── JSON / Excel：全量内存解析（文件通常较小） ──
       let rows: Array<Record<string, unknown>>
       if (extension === 'json') {
-        const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown
-        const list = Array.isArray(parsed)
-          ? parsed
-          : parsed && typeof parsed === 'object' && Array.isArray((parsed as { data?: unknown }).data)
-            ? (parsed as { data: unknown[] }).data
-            : []
-        rows = list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+        const { totalInserted } = await this.importJsonStreaming(connection, databaseName, tableName, filePath)
+        if (totalInserted === 0) return { success: false, message: '文件没有可导入的数据，请确认 JSON 数组包含记录' }
+        return { success: true, message: `导入成功，共写入 ${totalInserted} 行` }
       } else if (extension === 'xlsx' || extension === 'xls') {
         const workbook = XLSX.read(await readFile(filePath), { type: 'buffer', cellDates: true })
         const sheetName = workbook.SheetNames[0]
@@ -434,13 +486,44 @@ export class ImportExportService {
         })
         rows = records
       } else if (extension === 'json') {
-        const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown
-        const list = Array.isArray(parsed)
-          ? parsed
-          : parsed && typeof parsed === 'object' && Array.isArray((parsed as { data?: unknown }).data)
-            ? (parsed as { data: unknown[] }).data
-            : []
-        rows = list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+        // 流式 JSON 导入，避免大文件全量解析 OOM
+        const content = await readFile(filePath, 'utf8')
+        const arrayStart = content.indexOf('[')
+        if (arrayStart === -1) return { success: false, message: '文件中未检测到 JSON 数组' }
+        let depth = 0, inStr = false, escaped = false, objStart = -1
+        const BATCH_SIZE = 500
+        let batch: Array<Record<string, unknown>> = []
+        let totalInserted = 0
+        const targetCols = activeHeaders.map((h) => columnMapping[h])
+        for (let i = arrayStart + 1; i < content.length; i++) {
+          const c = content[i]
+          if (escaped) { escaped = false; continue }
+          if (c === '\\' && inStr) { escaped = true; continue }
+          if (c === '"') { inStr = !inStr; continue }
+          if (inStr) continue
+          if (c === '{') { if (depth === 0) objStart = i; depth++ }
+          else if (c === '}') {
+            depth--
+            if (depth === 0 && objStart >= 0) {
+              const obj = JSON.parse(content.slice(objStart, i + 1)) as Record<string, unknown>
+              const mapped: Record<string, unknown> = {}
+              activeHeaders.forEach((h) => { mapped[columnMapping[h]] = obj[h] })
+              batch.push(mapped)
+              if (batch.length >= BATCH_SIZE) {
+                await this.executeParamBatchInsert(connection, databaseName, tableName, targetCols, batch)
+                totalInserted += batch.length
+                batch = []
+              }
+              objStart = -1
+            }
+          }
+        }
+        if (batch.length > 0) {
+          await this.executeParamBatchInsert(connection, databaseName, tableName, targetCols, batch)
+          totalInserted += batch.length
+        }
+        if (totalInserted === 0) return { success: false, message: '文件中未检测到可导入的数据' }
+        return { success: true, message: `导入成功，共写入 ${totalInserted} 行数据` }
       } else if (extension === 'xlsx' || extension === 'xls') {
         const workbook = XLSX.read(await readFile(filePath), { type: 'buffer', cellDates: true })
         const sheetName = workbook.SheetNames[0]
@@ -753,26 +836,92 @@ export class ImportExportService {
         ? selectedColumns.map((col) => quoteIdentifierForEngine(connection.engine, col)).join(', ')
         : '*'
 
-      const result = await this.connectionService.executeQuery(
-        connectionId,
-        databaseName,
-        `SELECT ${colsToSelect} FROM ${safeTable}`
-      )
-      if (!result.success || !result.rows) {
-        return { success: false, message: result.message || '数据查询失败，无法导出' }
+      if (format === 'csv') {
+        const BATCH = 5000
+        const writer = createWriteStream(filePath, { encoding: 'utf8' })
+        let offset = 0
+        let isFirst = true
+        let totalRows = 0
+
+        try {
+          while (true) {
+            const result = await this.connectionService.executeQuery(
+              connectionId,
+              databaseName,
+              `SELECT ${colsToSelect} FROM ${safeTable} LIMIT ${BATCH} OFFSET ${offset}`
+            )
+            if (!result.success) {
+              writer.end()
+              return result
+            }
+            if (!result.rows?.length) break
+
+            const csvStr = stringify(result.rows, {
+              header: isFirst && includeHeader,
+              bom: isFirst,
+              columns: selectedColumns && selectedColumns.length > 0 ? selectedColumns : undefined
+            })
+            writer.write(csvStr)
+            totalRows += result.rows.length
+            isFirst = false
+            offset += BATCH
+            if (result.rows.length < BATCH) break
+          }
+          writer.end()
+          return { success: true, message: `成功将 ${totalRows} 行数据导出到 ${filePath.split(/[/\\]/).pop()}` }
+        } catch (err) {
+          writer.end()
+          throw err
+        }
       }
 
-      if (format === 'csv') {
-        const csvStr = stringify(result.rows, {
-          header: includeHeader,
-          bom: true,
-          columns: selectedColumns && selectedColumns.length > 0 ? selectedColumns : undefined
-        })
-        await writeFile(filePath, csvStr, 'utf8')
-      } else if (format === 'json') {
-        await writeFile(filePath, JSON.stringify(result.rows, null, 2), 'utf8')
+      if (format === 'json') {
+        // 流式 JSON 导出：分批查询 + 逐行写入，避免全量序列化
+        const BATCH = 5000
+        const writer = createWriteStream(filePath, { encoding: 'utf8' })
+        let offset = 0
+        let isFirst = true
+        let totalRows = 0
+        try {
+          writer.write('[\n')
+          while (true) {
+            const result = await this.connectionService.executeQuery(
+              connectionId, databaseName,
+              `SELECT ${colsToSelect} FROM ${safeTable} LIMIT ${BATCH} OFFSET ${offset}`
+            )
+            if (!result.success || !result.rows?.length) break
+            for (const row of result.rows) {
+              if (!isFirst) writer.write(',\n')
+              writer.write(JSON.stringify(row))
+              isFirst = false
+            }
+            totalRows += result.rows.length
+            offset += BATCH
+            if (result.rows.length < BATCH) break
+          }
+          writer.write('\n]')
+          writer.end()
+          return { success: true, message: `成功将 ${totalRows} 行数据导出到 ${filePath.split(/[/\\]/).pop()}` }
+        } catch (err) {
+          writer.end()
+          throw err
+        }
       } else if (format === 'xlsx') {
-        const worksheet = XLSX.utils.json_to_sheet(result.rows, {
+        // Excel 导出：XLSX 库不支持流式写入，分批查询后合并写入
+        const BATCH = 10000
+        const allRows: Array<Record<string, unknown>> = []
+        let offset = 0
+        while (true) {
+          const result = await this.connectionService.executeQuery(
+            connectionId, databaseName,
+            `SELECT ${colsToSelect} FROM ${safeTable} LIMIT ${BATCH} OFFSET ${offset}`
+          )
+          if (!result.success || !result.rows?.length) break
+          allRows.push(...result.rows)
+          offset += BATCH
+          if (result.rows.length < BATCH) break
+        }
+        const worksheet = XLSX.utils.json_to_sheet(allRows, {
           header: selectedColumns && selectedColumns.length > 0 ? selectedColumns : undefined,
           skipHeader: !includeHeader
         })
@@ -780,9 +929,10 @@ export class ImportExportService {
         XLSX.utils.book_append_sheet(workbook, worksheet, tableName.slice(0, 31))
         const buf = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })
         await writeFile(filePath, buf)
+        return { success: true, message: `成功将 ${allRows.length} 行数据导出到 ${filePath.split(/[/\\]/).pop()}` }
       }
 
-      return { success: true, message: `成功将 ${result.rows.length} 行数据导出到 ${filePath.split(/[/\\]/).pop()}` }
+      return { success: false, message: '不支持的导出格式' }
     } catch (err) {
       return { success: false, message: errorMessage(err) }
     }

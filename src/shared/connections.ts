@@ -21,7 +21,7 @@ export type ConnectionProtocol = DatabaseEngine | 'SSH'
 export type ConnectionEnvironment = 'production' | 'staging' | 'development'
 
 export type AppLanguage = 'zh-CN' | 'en-US'
-export type AppTheme = 'system' | 'light' | 'classic' | 'slate' | 'violet'
+export type AppTheme = 'system' | 'light' | 'classic'
 
 export interface AppPreferences {
   language: AppLanguage
@@ -66,6 +66,7 @@ export interface DatabaseItem {
   name: string
   charset?: string
   collation?: string
+  dataBytes?: number
   schemas?: SchemaItem[]
   tables: TableItem[]
   views: string[]
@@ -327,6 +328,52 @@ export interface DatabaseConnection {
   ssl?: SslConfig
 }
 
+export interface WorkspaceStats {
+  activeConnections: number
+  savedDatabaseConnections: number
+  todayQueryCount: number
+  todaySuccessfulQueryCount: number
+  databaseCount: number
+  tableCount: number
+  dataObjectCount: number
+  dataBytes: number | null
+  healthScore: number
+  healthStatus: string
+  healthSummary: string
+  averageLatencyMs: number | null
+  failedQueryRate: number
+  trend: WorkspaceQueryTrend
+  recentQueries: WorkspaceRecentQuery[]
+  connectionSummaries: WorkspaceConnectionSummary[]
+  updatedAt: string
+}
+
+export interface WorkspaceQueryTrend {
+  range: '7d' | '30d' | '90d'
+  label: string
+  subtitle: string
+  points: number[]
+  labels: string[]
+}
+
+export interface WorkspaceRecentQuery {
+  id: number
+  title: string
+  sql: string
+  time: string
+  success: boolean
+}
+
+export interface WorkspaceConnectionSummary {
+  id: number
+  name: string
+  engine: string
+  database: string
+  latency: string
+  color: string
+  open: boolean
+}
+
 export interface SshConfig {
   enabled: boolean
   host: string
@@ -515,4 +562,3 @@ export interface KillProcessResult {
   success: boolean
   message: string
 }
-

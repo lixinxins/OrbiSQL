@@ -35,7 +35,7 @@ const proxy = new WorkerProxy('db-query-worker.js')
 /** MySQL 查询 */
 export const dbWorkerMysqlQuery = async (
   poolKey: string,
-  config: { host: string; port: number; username: string; password: string; sslEnabled: boolean; sslRejectUnauthorized: boolean; sslCaPath: string; sslCertPath: string; sslKeyPath: string },
+  config: { id?: number; host: string; port: number; username: string; password: string; sslEnabled: boolean; sslRejectUnauthorized: boolean; sslCaPath: string; sslCertPath: string; sslKeyPath: string },
   databaseName: string,
   sql: string,
   params?: unknown[]
@@ -46,7 +46,7 @@ export const dbWorkerMysqlQuery = async (
 /** PostgreSQL 查询 */
 export const dbWorkerPgQuery = async (
   poolKey: string,
-  config: { host: string; port: number; username: string; password: string; defaultDatabase?: string; sslEnabled: boolean; sslRejectUnauthorized: boolean; sslCaPath: string; sslCertPath: string; sslKeyPath: string },
+  config: { id?: number; host: string; port: number; username: string; password: string; defaultDatabase?: string; sslEnabled: boolean; sslRejectUnauthorized: boolean; sslCaPath: string; sslCertPath: string; sslKeyPath: string },
   databaseName: string,
   sql: string,
   params?: unknown[]

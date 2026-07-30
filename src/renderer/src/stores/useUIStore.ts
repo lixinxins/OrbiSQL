@@ -7,7 +7,15 @@ export interface UIState {
   sidebarCollapsed: boolean
   language: AppLanguage
   theme: AppTheme
-  statusInfo: { ping: number | null; version: string; charset: string }
+  statusInfo: {
+    ping: number | null
+    version: string
+    charset: string
+    dbConnectedCount: number
+    sshConnectedCount: number
+    /** 当前侧边栏聚焦项信息 */
+    focusedItem: { connectionName: string; databaseName?: string; tableName?: string; engine?: string } | null
+  }
   recentConnections: Array<{ connectionId: number; connectionName: string; databaseName: string; engine: string; ts: number }>
   tabContextMenu: { id: string; kind: ClosableWorkspaceKind; x: number; y: number } | null
   actions: {
@@ -15,6 +23,8 @@ export interface UIState {
     setLanguage: (language: AppLanguage) => void
     setTheme: (theme: AppTheme) => void
     setStatusInfo: (statusInfo: UIState['statusInfo']) => void
+    /** 设置侧边栏当前聚焦项（点击连接/数据库/表时调用） */
+    setFocusedItem: (item: UIState['statusInfo']['focusedItem']) => void
     pushRecentConnection: (entry: UIState['recentConnections'][number]) => void
     setTabContextMenu: (tabContextMenu: UIState['tabContextMenu']) => void
   }
@@ -30,10 +40,10 @@ export const useUIStore = create<UIState>((set) => ({
   theme: (() => {
     try {
       const saved = localStorage.getItem(LS_KEYS.THEME)
-      return (saved === 'system' || saved === 'light' || saved === 'slate' || saved === 'violet' || saved === 'classic') ? (saved as AppTheme) : 'system'
-    } catch { return 'system' as AppTheme }
+      return saved === 'classic' ? 'classic' : 'light'
+    } catch { return 'light' as AppTheme }
   })(),
-  statusInfo: { ping: null, version: '', charset: 'UTF-8' },
+  statusInfo: { ping: null, version: '', charset: 'UTF-8', dbConnectedCount: 0, sshConnectedCount: 0, focusedItem: null },
   recentConnections: (() => {
     try { return JSON.parse(localStorage.getItem(LS_KEYS.RECENT_CONNECTIONS) ?? '[]') as UIState['recentConnections'] } catch { return [] }
   })(),
@@ -59,6 +69,10 @@ export const useUIStore = create<UIState>((set) => ({
     },
 
     setStatusInfo: (statusInfo) => set({ statusInfo }),
+
+    setFocusedItem: (item) => set((state) => ({
+      statusInfo: { ...state.statusInfo, focusedItem: item }
+    })),
 
     pushRecentConnection: (entry) => {
       set((state) => {

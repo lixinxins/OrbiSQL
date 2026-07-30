@@ -32,7 +32,7 @@ import type { StoredConnection } from '../../database/connection-repository'
 import { dbWorkerPgQuery } from '../db-query-runtime'
 
 export type AdapterConnection = Pick<StoredConnection, 'host' | 'port' | 'username' | 'password' | 'defaultDatabase'> &
-  SslConnectionConfig
+  Partial<Pick<StoredConnection, 'id'>> & SslConnectionConfig
 
 export interface ReadDatabasesOptions {
   /** 仅返回库名和表名，跳过列/索引/外键/触发器等详细元数据 */
@@ -139,10 +139,12 @@ const normalizedColumnType = (dataType: string): MySQLColumnType => {
 // ── PostgreSQL connection pool cache ──────────────────────────────────
 
 const postgresPools = new Map<string, Pool>()
+const pgLastAccess = new Map<string, number>()
 
 export const getPostgresPool = (connection: AdapterConnection, database?: string): Pool => {
   const dbName = database || connection.defaultDatabase || 'postgres'
-  const poolKey = `${connection.host}:${connection.port}:${connection.username}:${dbName}`
+  const identity = connection.id != null && connection.id > 0 ? `id:${connection.id}` : `${connection.host}:${connection.port}:${connection.username}`
+  const poolKey = `${identity}:${dbName}`
   let pool = postgresPools.get(poolKey)
   if (!pool) {
     pool = new Pool({
@@ -158,12 +160,15 @@ export const getPostgresPool = (connection: AdapterConnection, database?: string
     })
     postgresPools.set(poolKey, pool)
   }
+  pgLastAccess.set(poolKey, Date.now())
   return pool
 }
 
 /** 关闭与某主连接（host:port:username）关联的所有 PG 连接池 */
 export const closePostgresPools = (connection: AdapterConnection): void => {
-  const prefix = `${connection.host}:${connection.port}:${connection.username}:`
+  const prefix = connection.id != null && connection.id > 0
+    ? `id:${connection.id}:`
+    : `${connection.host}:${connection.port}:${connection.username}:`
   for (const [key, pool] of postgresPools) {
     if (key.startsWith(prefix)) {
       postgresPools.delete(key)
@@ -176,7 +181,21 @@ export const closePostgresPools = (connection: AdapterConnection): void => {
 export const closeAllPostgresPools = async (): Promise<void> => {
   const ends = Array.from(postgresPools.values()).map((pool) => pool.end().catch(() => undefined))
   postgresPools.clear()
+  pgLastAccess.clear()
   await Promise.allSettled(ends)
+}
+
+/** 驱逐空闲超过 maxIdleMs 的 PG 连接池 */
+export const evictIdlePostgresPools = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  for (const [key, pool] of postgresPools) {
+    const lastAccess = pgLastAccess.get(key) ?? 0
+    if (now - lastAccess > maxIdleMs) {
+      postgresPools.delete(key)
+      pgLastAccess.delete(key)
+      pool.end().catch(() => undefined)
+    }
+  }
 }
 
 // ── PostgreSQL functions ──────────────────────────────────────────────
@@ -534,8 +553,8 @@ export const executePostgreSqlQuery = async (
   databaseName: string,
   sql: string
 ): Promise<QueryExecutionResult> => {
-  const poolKey = `${connection.host}:${connection.port}:${connection.username}`
-  const workerConfig = { host: connection.host, port: connection.port, username: connection.username, password: connection.password, defaultDatabase: connection.defaultDatabase, sslEnabled: connection.sslEnabled, sslRejectUnauthorized: connection.sslRejectUnauthorized, sslCaPath: connection.sslCaPath, sslCertPath: connection.sslCertPath, sslKeyPath: connection.sslKeyPath }
+  const poolKey = connection.id != null && connection.id > 0 ? `id:${connection.id}` : `${connection.host}:${connection.port}:${connection.username}`
+  const workerConfig = { id: connection.id, host: connection.host, port: connection.port, username: connection.username, password: connection.password, defaultDatabase: connection.defaultDatabase, sslEnabled: connection.sslEnabled, sslRejectUnauthorized: connection.sslRejectUnauthorized, sslCaPath: connection.sslCaPath, sslCertPath: connection.sslCertPath, sslKeyPath: connection.sslKeyPath }
   const startTime = new Date().toISOString()
   const startMs = performance.now()
   try {
@@ -577,6 +596,7 @@ export const executePostgreSqlQuery = async (
       let cursorId: string | undefined
       if (truncated) {
         const cursor = createCursor({
+          connectionId: connection.id,
           engine: 'PostgreSQL',
           connectionKey: `${connection.host}:${connection.port}/${databaseName}`,
           databaseName,
@@ -607,8 +627,8 @@ export const fetchMorePostgreSqlRows = async (
   cursor: QueryCursor,
   count: number = QUERY_ROW_LIMIT
 ): Promise<{ rows: Array<Record<string, unknown>>; done: boolean }> => {
-  const poolKey = `${connection.host}:${connection.port}:${connection.username}`
-  const workerConfig = { host: connection.host, port: connection.port, username: connection.username, password: connection.password, defaultDatabase: connection.defaultDatabase, sslEnabled: connection.sslEnabled, sslRejectUnauthorized: connection.sslRejectUnauthorized, sslCaPath: connection.sslCaPath, sslCertPath: connection.sslCertPath, sslKeyPath: connection.sslKeyPath }
+  const poolKey = connection.id != null && connection.id > 0 ? `id:${connection.id}` : `${connection.host}:${connection.port}:${connection.username}`
+  const workerConfig = { id: connection.id, host: connection.host, port: connection.port, username: connection.username, password: connection.password, defaultDatabase: connection.defaultDatabase, sslEnabled: connection.sslEnabled, sslRejectUnauthorized: connection.sslRejectUnauthorized, sslCaPath: connection.sslCaPath, sslCertPath: connection.sslCertPath, sslKeyPath: connection.sslKeyPath }
   const limitedSql = applyLimitOffset(cursor.sql, count, cursor.offset)
   const queryResult = await dbWorkerPgQuery(poolKey, workerConfig, databaseName, limitedSql)
   const rows = queryResult.type === 'rows' ? queryResult.rows : []

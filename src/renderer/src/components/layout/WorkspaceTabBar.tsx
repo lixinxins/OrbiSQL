@@ -189,7 +189,7 @@ export default function WorkspaceTabBar({
           }}
         >
           <Database weight="fill" />
-          <span>工作台</span>
+          <span>智能工作台</span>
         </div>
         {databaseTabs.map((tab) => (
           <div
@@ -488,7 +488,7 @@ export default function WorkspaceTabBar({
                   }}
                 >
                   <Database weight="fill" />
-                  <span>工作台</span>
+                  <span>智能工作台</span>
                 </button>
               </div>
               {contextMenuTabs.map((tab) => (
@@ -543,4 +543,3 @@ export default function WorkspaceTabBar({
     </div>
   )
 }
-

@@ -148,9 +148,10 @@ import {
   getCursor,
   createCursor,
   updateCursorOffset,
-  deleteCursor
+  deleteCursor,
+  deleteCursorsForConnection
 } from './query-cursor-manager'
-import { dbWorkerMysqlQuery } from './db-query-runtime'
+import { dbWorkerClosePools, dbWorkerMysqlQuery } from './db-query-runtime'
 
 interface DatabaseRow extends RowDataPacket {
   databaseName: string
@@ -162,6 +163,7 @@ interface TableRow extends RowDataPacket {
   databaseName: string
   tableName: string
   comment: string
+  dataBytes?: number
 }
 
 interface ObjectRow extends RowDataPacket {
@@ -220,6 +222,7 @@ interface TableDefinitionForeignKeyRow extends RowDataPacket {
 }
 
 const MYSQL_COLOR = '#f3a83b'
+const isMysqlFamily = (engine: string): boolean => engine === 'MySQL' || engine === 'MariaDB' || engine === 'TiDB'
 const ENGINE_COLORS: Partial<Record<ConnectionProtocol, string>> = {
   MySQL: MYSQL_COLOR,
   PostgreSQL: '#336791',
@@ -238,6 +241,35 @@ export class ConnectionService {
 
   constructor(public readonly repository: ConnectionRepository) {
     this.startHeartbeatTimer()
+  }
+
+  /**
+   * 关闭一个保存连接关联的全部运行时资源。
+   * 编辑连接前必须先清理，否则连接测试会命中旧地址、旧密码或旧 TLS 配置的缓存。
+   */
+  private async closeRuntimeResources(connection: StoredConnection): Promise<void> {
+    const workerPrefix = connection.id > 0
+      ? `id:${connection.id}`
+      : `${connection.host}:${connection.port}:${connection.username}`
+    sshTunnelManager.closeTunnel(connection.id)
+    deleteCursorsForConnection(connection.id)
+    const closers: Array<Promise<unknown>> = [destroyMysqlPools(connection.id)]
+    if (connection.engine === 'MySQL' || connection.engine === 'MariaDB' || connection.engine === 'TiDB') {
+      closers.push(dbWorkerClosePools(workerPrefix, 'mysql'))
+    }
+    if (connection.engine === 'PostgreSQL') {
+      closePostgresPools(connection)
+      closers.push(dbWorkerClosePools(workerPrefix, 'pg'))
+    }
+    if (connection.engine === '达梦') closers.push(closeDmPools(connection))
+    if (connection.engine === '人大金仓') closers.push(closeKbPools(connection))
+    if (connection.engine === 'SQLite') closers.push(closeSqliteHandle(connection))
+    if (connection.engine === 'DuckDB') closers.push(closeDuckDbHandle(connection))
+    if (connection.engine === 'SQL Server') closers.push(closeMssqlPools(connection))
+    if (connection.engine === 'MongoDB') closers.push(closeMongoClients(connection))
+    if (connection.engine === 'ClickHouse') closers.push(closeChClient(connection))
+    if (connection.engine === 'Redis') closers.push(closeRedisClient(connection))
+    await Promise.allSettled(closers)
   }
 
   updateSortOrders(orders: Array<{ id: number; sortOrder: number }>): ConnectionActionResult {
@@ -263,7 +295,7 @@ export class ConnectionService {
         connections = connections.filter((c) => idSet.has(c.id))
       }
 
-      const includePwd = options?.includePasswords !== false
+      const includePwd = options?.includePasswords === true
 
       const exportData = {
         app: 'OrbiSQL',
@@ -554,9 +586,34 @@ export class ConnectionService {
     catch (error) { return { success: false, message: this.errorMessage(error) } }
   }
 
+  renameConnectionGroup(id: number, name: string): ConnectionActionResult {
+    const normalized = name.trim()
+    if (!normalized) return { success: false, message: '请输入分组名称' }
+    if (normalized.length > 30) return { success: false, message: '分组名称不能超过 30 个字符' }
+    const groups = this.repository.listGroups()
+    if (!groups.some((g) => g.id === id)) return { success: false, message: '分组不存在' }
+    try {
+      this.repository.renameGroup(id, normalized)
+      return { success: true, message: '分组已重命名' }
+    } catch (error) {
+      return { success: false, message: this.errorMessage(error) }
+    }
+  }
+
   setConnectionGroup(connectionId: number, groupId: number | null): ConnectionActionResult {
-    if (!this.repository.getById(connectionId)) return { success: false, message: '连接不存在' }
+    const conn = this.repository.getById(connectionId)
+    if (!conn) return { success: false, message: '连接不存在' }
     if (groupId != null && !this.repository.listGroups().some((group) => group.id === groupId)) return { success: false, message: '分组不存在' }
+    if (groupId != null) {
+      const group = this.repository.listGroups().find((g) => g.id === groupId)
+      if (group) {
+        const isSshEngine = conn.engine === 'SSH'
+        const expectedCategory = isSshEngine ? 'ssh' : 'database'
+        if (group.category !== expectedCategory) {
+          return { success: false, message: '连接类型与分组类型不匹配' }
+        }
+      }
+    }
     this.repository.setConnectionGroup(connectionId, groupId)
     return { success: true, message: groupId == null ? '已移至未分组' : '连接分组已更新' }
   }
@@ -630,6 +687,7 @@ export class ConnectionService {
     if (!existing) return { success: false, message: '连接不存在' }
 
     try {
+      await this.closeRuntimeResources(existing)
       await this.readDatabases({
         ...input,
         password: input.password || existing.password,
@@ -656,7 +714,8 @@ export class ConnectionService {
         console.error('[ConnectionService] 密码解密失败，拒绝以空密码建立连接')
         return { success: false, message: '密码解密失败，请重新保存连接密码后再试' }
       }
-      await this.readDatabases(connection)
+      const databases = await this.readDatabases(connection, { light: true })
+      this.repository.replaceDatabaseStats(connection, databases)
       this.repository.setOpen(id, true)
       console.warn('[ConnectionService] open() success')
       return { success: true, message: '连接已打开' }
@@ -666,22 +725,12 @@ export class ConnectionService {
     }
   }
 
-  close(id: number): ConnectionActionResult {
+  async close(id: number): Promise<ConnectionActionResult> {
     try {
       const connection = this.repository.getById(id)
       if (!connection) return { success: false, message: '连接不存在' }
       this.repository.setOpen(id, false)
-      sshTunnelManager.closeTunnel(id)
-      if (connection.engine === 'PostgreSQL') closePostgresPools(connection)
-      if (connection.engine === '达梦') void closeDmPools(connection)
-      if (connection.engine === '人大金仓') void closeKbPools(connection)
-      if (connection.engine === 'SQLite') void closeSqliteHandle(connection)
-      if (connection.engine === 'DuckDB') void closeDuckDbHandle(connection)
-      if (connection.engine === 'SQL Server') void closeMssqlPools(connection)
-      if (connection.engine === 'MongoDB') void closeMongoClients(connection)
-      if (connection.engine === 'ClickHouse') void closeChClient(connection)
-      if (connection.engine === 'Redis') void closeRedisClient(connection)
-      void destroyMysqlPools(id)
+      await this.closeRuntimeResources(connection)
       return { success: true, message: '连接已关闭' }
     } catch (error) {
       return { success: false, message: this.errorMessage(error) }
@@ -697,21 +746,11 @@ export class ConnectionService {
     }
   }
 
-  delete(id: number): ConnectionActionResult {
+  async delete(id: number): Promise<ConnectionActionResult> {
     const connection = this.repository.getById(id)
     if (!connection) return { success: false, message: '连接不存在' }
     this.repository.delete(id)
-    sshTunnelManager.closeTunnel(id)
-    if (connection.engine === 'PostgreSQL') closePostgresPools(connection)
-    if (connection.engine === '达梦') void closeDmPools(connection)
-    if (connection.engine === '人大金仓') void closeKbPools(connection)
-    if (connection.engine === 'SQLite') void closeSqliteHandle(connection)
-    if (connection.engine === 'DuckDB') void closeDuckDbHandle(connection)
-    if (connection.engine === 'SQL Server') void closeMssqlPools(connection)
-    if (connection.engine === 'MongoDB') void closeMongoClients(connection)
-    if (connection.engine === 'ClickHouse') void closeChClient(connection)
-    if (connection.engine === 'Redis') void closeRedisClient(connection)
-    void destroyMysqlPools(id)
+    await this.closeRuntimeResources(connection)
     return { success: true, message: '连接已删除' }
   }
 
@@ -772,6 +811,7 @@ export class ConnectionService {
     if (connection.engine === 'DuckDB') return { success: false, message: 'DuckDB 连接即数据库文件，请通过新建连接添加其他文件' }
     if (connection.engine === 'PostgreSQL') {
       const result = await this.executeSql(input.connectionId, `CREATE DATABASE ${this.quoteIdentifierForEngine('PostgreSQL', input.name)} ENCODING 'UTF8'`)
+      if (result.success) await this.refreshPersistedDatabaseStats(connection)
       return result.success ? { success: true, message: '数据库已创建' } : result
     }
     return this.executeDatabaseStatement(
@@ -791,6 +831,7 @@ export class ConnectionService {
     if (connection.engine === 'PostgreSQL') {
       if (input.name === input.currentName) return { success: true, message: '数据库没有变化' }
       const result = await this.executeSql(input.connectionId, `ALTER DATABASE ${this.quoteIdentifierForEngine('PostgreSQL', input.currentName)} RENAME TO ${this.quoteIdentifierForEngine('PostgreSQL', input.name)}`)
+      if (result.success) await this.refreshPersistedDatabaseStats(connection)
       return result.success ? { success: true, message: '数据库已更新' } : result
     }
     return this.executeDatabaseStatement(
@@ -807,24 +848,56 @@ export class ConnectionService {
     if (connection.engine === 'DuckDB') return { success: false, message: '为避免误删文件，请在连接列表中删除 DuckDB 连接' }
     if (connection.engine === 'PostgreSQL') {
       const result = await this.executeSql(connectionId, `DROP DATABASE ${this.quoteIdentifierForEngine('PostgreSQL', databaseName)}`)
+      if (result.success) this.repository.removeDatabaseStats(connectionId, databaseName)
       return result.success ? { success: true, message: '数据库已删除' } : result
     }
-    return this.executeDatabaseStatement(
+    const result = await this.executeDatabaseStatement(
       connectionId,
       `DROP DATABASE ${this.quoteIdentifier(databaseName)}`,
       '数据库已删除'
     )
+    if (result.success) this.repository.removeDatabaseStats(connectionId, databaseName)
+    return result
   }
 
   async executeQuery(connectionId: number, databaseName: string, sql: string, sessionId?: string): Promise<QueryExecutionResult> {
     if (!sql.trim()) return { success: false, message: '请输入 SQL 语句' }
+    const storedForStats = this.repository.getById(connectionId)
+    const recordResult = async (result: QueryExecutionResult, queryCount: number): Promise<QueryExecutionResult> => {
+      if (storedForStats) {
+        try {
+          this.repository.recordQueryRun({
+            connectionId,
+            connectionName: storedForStats.name,
+            engine: storedForStats.engine,
+            databaseName,
+            sql,
+            success: result.success,
+            queryCount: result.queryCount ?? queryCount,
+            affectedRows: result.affectedRows,
+            durationMs: result.durationMs,
+            errorMessage: result.success ? '' : result.message
+          })
+        } catch (error) {
+          console.warn('记录工作台查询统计失败：', this.errorMessage(error))
+        }
+        await this.refreshStatsForSql(storedForStats, databaseName, sql, result.success)
+      }
+      return result
+    }
     if (sessionId && transactionManager.has(sessionId)) {
-      try { return await transactionManager.execute(sessionId, sql) } catch (error) {
-        return { success: false, message: this.errorMessage(error), queryCount: 0, successCount: 0, errorCount: 1 }
+      try {
+        const result = await transactionManager.execute(sessionId, sql)
+        return await recordResult(result, Math.max(1, result.queryCount ?? splitSqlStatements(sql).length))
+      } catch (error) {
+        return await recordResult({ success: false, message: this.errorMessage(error), queryCount: 0, successCount: 0, errorCount: 1 }, 1)
       }
     }
     const statements = splitSqlStatements(sql)
-    if (statements.length <= 1) return this.executeSingleQuery(connectionId, databaseName, statements[0] ?? sql)
+    if (statements.length <= 1) {
+      const result = await this.executeSingleQuery(connectionId, databaseName, statements[0] ?? sql)
+      return await recordResult(result, 1)
+    }
     const stored = this.repository.getById(connectionId)
     if (!stored) return { success: false, message: '连接不存在' }
     if (!stored.open) return { success: false, message: '请先打开连接' }
@@ -832,9 +905,10 @@ export class ConnectionService {
       const connection = stored.sshEnabled && !sshTunnelManager.getEndpoint(connectionId)
         ? await this.prepareRuntimeConnection(stored, connectionId)
         : stored
-      return await transactionManager.executeBatch(connection, databaseName, sql)
+      const result = await transactionManager.executeBatch(connection, databaseName, sql)
+      return await recordResult(result, statements.length)
     } catch (error) {
-      return { success: false, message: this.errorMessage(error), queryCount: statements.length, successCount: 0, errorCount: 1 }
+      return await recordResult({ success: false, message: this.errorMessage(error), queryCount: statements.length, successCount: 0, errorCount: 1 }, statements.length)
     }
   }
 
@@ -886,8 +960,8 @@ export class ConnectionService {
       return { success: false, message: this.errorMessage(error) }
     }
 
-    const poolKey = `${connection.host}:${connection.port}:${connection.username}`
-    const workerConfig = { host: connection.host, port: connection.port, username: connection.username, password: connection.password, sslEnabled: connection.sslEnabled, sslRejectUnauthorized: connection.sslRejectUnauthorized, sslCaPath: connection.sslCaPath, sslCertPath: connection.sslCertPath, sslKeyPath: connection.sslKeyPath }
+    const poolKey = connection.id > 0 ? `id:${connection.id}` : `${connection.host}:${connection.port}:${connection.username}`
+    const workerConfig = { id: connection.id, host: connection.host, port: connection.port, username: connection.username, password: connection.password, sslEnabled: connection.sslEnabled, sslRejectUnauthorized: connection.sslRejectUnauthorized, sslCaPath: connection.sslCaPath, sslCertPath: connection.sslCertPath, sslKeyPath: connection.sslKeyPath }
     const startTime = new Date().toISOString()
     const startMs = performance.now()
     const executionStats = (success: boolean): Pick<QueryExecutionResult, 'startTime' | 'endTime' | 'durationMs' | 'queryCount' | 'successCount' | 'errorCount'> => ({
@@ -915,6 +989,7 @@ export class ConnectionService {
         let cursorId: string | undefined
         if (truncated) {
           const cursor = createCursor({
+            connectionId: connection.id,
             engine: 'MySQL',
             connectionKey: `${connection.host}:${connection.port}/${databaseName}`,
             databaseName,
@@ -957,9 +1032,17 @@ export class ConnectionService {
   }> {
     const cursor = getCursor(cursorId)
     if (!cursor) return { success: false, message: '游标不存在或已过期，请重新执行查询' }
+    if (cursor.connectionId != null && cursor.connectionId !== connectionId) {
+      return { success: false, message: '游标与当前连接不匹配，请重新执行查询' }
+    }
     const stored = this.repository.getById(connectionId)
     if (!stored) return { success: false, message: '连接不存在' }
     if (!stored.open) return { success: false, message: '请先打开连接' }
+    const sameEngine = cursor.engine === stored.engine || (cursor.engine === 'MySQL' && isMysqlFamily(stored.engine))
+    if (!sameEngine) return { success: false, message: '游标与当前数据库类型不匹配，请重新执行查询' }
+    if (cursor.databaseName && databaseName && cursor.databaseName !== databaseName) {
+      return { success: false, message: '游标与当前数据库不匹配，请重新执行查询' }
+    }
     let connection = stored
     if (stored.sshEnabled && !sshTunnelManager.getEndpoint(connectionId)) {
       try { connection = await this.prepareRuntimeConnection(stored, connectionId) }
@@ -985,8 +1068,8 @@ export class ConnectionService {
         result = await fetchMorePostgreSqlRows(connection, databaseName, cursor)
       } else {
         // MySQL - 通过 Worker 执行
-        const poolKey = `${connection.host}:${connection.port}:${connection.username}`
-        const workerConfig = { host: connection.host, port: connection.port, username: connection.username, password: connection.password, sslEnabled: connection.sslEnabled, sslRejectUnauthorized: connection.sslRejectUnauthorized, sslCaPath: connection.sslCaPath, sslCertPath: connection.sslCertPath, sslKeyPath: connection.sslKeyPath }
+        const poolKey = connection.id > 0 ? `id:${connection.id}` : `${connection.host}:${connection.port}:${connection.username}`
+        const workerConfig = { id: connection.id, host: connection.host, port: connection.port, username: connection.username, password: connection.password, sslEnabled: connection.sslEnabled, sslRejectUnauthorized: connection.sslRejectUnauthorized, sslCaPath: connection.sslCaPath, sslCertPath: connection.sslCertPath, sslKeyPath: connection.sslKeyPath }
         const limitedSql = applyLimitOffset(cursor.sql, QUERY_ROW_LIMIT, cursor.offset)
         const queryResult = await dbWorkerMysqlQuery(poolKey, workerConfig, databaseName, limitedSql)
         const mappedRows = queryResult.type === 'rows' ? queryResult.rows : []
@@ -1247,6 +1330,7 @@ export class ConnectionService {
         if (input.includeData) {
           await pool.query(`INSERT INTO ${tgtFull} SELECT * FROM ${srcFull}`)
         }
+        await this.refreshPersistedDatabaseStats(connection, targetDb)
         return {
           success: true,
           message: input.includeData
@@ -1263,6 +1347,7 @@ export class ConnectionService {
           : `CREATE TABLE ${target} (LIKE ${source} INCLUDING ALL)`
         const created = await executePostgreSqlQuery(connection, targetDb, createSql)
         if (!created.success) return { success: false, message: created.message || '复制数据表失败' }
+        await this.refreshPersistedDatabaseStats(connection, targetDb)
         return {
           success: true,
           message: input.includeData
@@ -1290,6 +1375,7 @@ export class ConnectionService {
         if (input.includeData) {
           await executeSqliteQuery(connection, `INSERT INTO ${target} SELECT * FROM ${source}`)
         }
+        await this.refreshPersistedDatabaseStats(connection, targetDb)
         return {
           success: true,
           message: input.includeData
@@ -1325,9 +1411,12 @@ export class ConnectionService {
     const connection = this.repository.getById(input.connectionId)
     if (!connection) return { success: false, message: '连接不存在' }
     if (connection.engine === 'PostgreSQL' || connection.engine === 'SQLite') {
-      return connection.engine === 'PostgreSQL'
+      const result = connection.engine === 'PostgreSQL'
         ? createPostgreSqlPortableTable(connection, input)
         : createSqlitePortableTable(connection, input)
+      const resolved = await result
+      if (resolved.success) await this.refreshPersistedDatabaseStats(connection, input.databaseName)
+      return resolved
     }
     const columnNames = new Set<string>()
     const definitions: string[] = []
@@ -1481,7 +1570,11 @@ export class ConnectionService {
     if ((input.tableComment ?? '').length > 2048) return { success: false, message: '表注释不能超过 2048 个字符' }
     const targetConnection = this.repository.getById(input.connectionId)
     if (!targetConnection) return { success: false, message: '连接不存在' }
-    if (targetConnection.engine === 'SQLite') return await updateSqliteTable(targetConnection, input)
+    if (targetConnection.engine === 'SQLite') {
+      const result = await updateSqliteTable(targetConnection, input)
+      if (result.success) await this.refreshPersistedDatabaseStats(targetConnection, input.databaseName)
+      return result
+    }
     if (targetConnection.engine === 'PostgreSQL') {
       const currentDefinition = await getPostgreSqlTableDefinition(targetConnection, input.databaseName, input.currentTableName)
       if (!currentDefinition.success || !currentDefinition.columns || !currentDefinition.indexes || !currentDefinition.foreignKeys) return currentDefinition
@@ -1498,7 +1591,9 @@ export class ConnectionService {
         || indexSignature(input.indexes) !== indexSignature(currentDefinition.indexes)
         || foreignKeySignature(input.foreignKeys) !== foreignKeySignature(currentDefinition.foreignKeys)
       if (structureChanged) return { success: false, message: 'PostgreSQL 当前仅支持在设计器中修改表注释；字段结构请使用 ALTER TABLE' }
-      return updatePostgreSqlTableComment(targetConnection, input.databaseName, input.currentTableName, input.tableComment)
+      const result = await updatePostgreSqlTableComment(targetConnection, input.databaseName, input.currentTableName, input.tableComment)
+      if (result.success) await this.refreshPersistedDatabaseStats(targetConnection, input.databaseName)
+      return result
     }
     if (targetConnection.engine !== 'MySQL') {
       return { success: false, message: `${targetConnection.engine} 暂不支持在设计器中修改已有表结构，请使用查询页面执行 ALTER TABLE` }
@@ -1594,6 +1689,7 @@ export class ConnectionService {
       if (input.tableName !== input.currentTableName) {
         await pool.query(`RENAME TABLE ${this.quoteIdentifier(input.currentTableName)} TO ${this.quoteIdentifier(input.tableName)}`)
       }
+      await this.refreshPersistedDatabaseStats(connection, input.databaseName)
       return { success: true, message: '数据表结构已保存' }
     } catch (error) {
       return { success: false, message: this.errorMessage(error) }
@@ -1615,6 +1711,7 @@ export class ConnectionService {
   async testUpdate(input: UpdateConnectionInput): Promise<ConnectionActionResult> {
     const existing = this.repository.getById(input.id)
     if (!existing) return { success: false, message: '连接不存在' }
+    await this.closeRuntimeResources(existing)
     return this.test({
       ...input,
       password: input.password || existing.password,
@@ -1624,6 +1721,24 @@ export class ConnectionService {
         passphrase: input.ssh.passphrase || existing.sshPassphrase
       } : input.ssh
     })
+  }
+
+  private async refreshPersistedDatabaseStats(connection: StoredConnection, databaseName?: string): Promise<void> {
+    if (connection.engine === 'SSH' || !connection.open) return
+    try {
+      const databases = await this.readDatabases(connection, { light: true })
+      const scopedDatabases = databaseName ? databases.filter((database) => database.name === databaseName) : databases
+      this.repository.replaceDatabaseStats(connection, scopedDatabases.length ? scopedDatabases : databases)
+    } catch (error) {
+      console.warn('刷新工作台数据库统计失败：', this.errorMessage(error))
+    }
+  }
+
+  private async refreshStatsForSql(connection: StoredConnection, databaseName: string, sql: string, success: boolean): Promise<void> {
+    if (!success) return
+    if (!/\b(create|drop|alter|rename|truncate)\s+(table|database|schema)\b/i.test(sql)) return
+    const isDatabaseDdl = /\b(create|drop|alter|rename)\s+(database|schema)\b/i.test(sql)
+    await this.refreshPersistedDatabaseStats(connection, isDatabaseDdl ? undefined : databaseName)
   }
 
   private async hydrateConnection(connection: StoredConnection): Promise<DatabaseConnection> {
@@ -1651,6 +1766,7 @@ export class ConnectionService {
 
     try {
       const databases = await this.readDatabases(connection, { light: true })
+      this.repository.replaceDatabaseStats(connection, databases)
       return {
         id: connection.id,
         name: connection.name,
@@ -1769,7 +1885,8 @@ export class ConnectionService {
           ORDER BY SCHEMA_NAME`
         ),
         pool.query<TableRow[]>(`
-          SELECT TABLE_SCHEMA AS databaseName, TABLE_NAME AS tableName, COALESCE(TABLE_COMMENT, '') AS comment
+          SELECT TABLE_SCHEMA AS databaseName, TABLE_NAME AS tableName, COALESCE(TABLE_COMMENT, '') AS comment,
+            COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS dataBytes
           FROM information_schema.TABLES
           WHERE TABLE_TYPE = 'BASE TABLE'
           ORDER BY TABLE_SCHEMA, TABLE_NAME
@@ -1792,10 +1909,15 @@ export class ConnectionService {
           })
           tablesByDatabase.set(table.databaseName, tables)
         }
+        const dataBytesByDatabase = new Map<string, number>()
+        for (const table of tableRows) {
+          dataBytesByDatabase.set(table.databaseName, (dataBytesByDatabase.get(table.databaseName) ?? 0) + Number(table.dataBytes ?? 0))
+        }
         return databaseRows.map((database: DatabaseRow) => ({
           name: database.databaseName,
           charset: database.charset,
           collation: database.collation,
+          dataBytes: dataBytesByDatabase.get(database.databaseName) ?? 0,
           tables: tablesByDatabase.get(database.databaseName) ?? [],
           views: [],
           functions: [],
@@ -1923,11 +2045,16 @@ export class ConnectionService {
 
       const viewsByDatabase = groupObjects(viewRows)
       const proceduresByDatabase = groupObjects(procedureRows)
+      const dataBytesByDatabase = new Map<string, number>()
+      for (const table of tableRows) {
+        dataBytesByDatabase.set(table.databaseName, (dataBytesByDatabase.get(table.databaseName) ?? 0) + Number(table.dataBytes ?? 0))
+      }
 
       return databaseRows.map((database: DatabaseRow) => ({
         name: database.databaseName,
         charset: database.charset,
         collation: database.collation,
+        dataBytes: dataBytesByDatabase.get(database.databaseName) ?? 0,
         tables: tablesByDatabase.get(database.databaseName) ?? [],
         views: viewsByDatabase.get(database.databaseName) ?? [],
         functions: [],
@@ -1999,7 +2126,7 @@ export class ConnectionService {
             [databaseName]
           ),
           pool.query<TableRow[]>(
-            "SELECT TABLE_SCHEMA AS databaseName, TABLE_NAME AS tableName, COALESCE(TABLE_COMMENT, '') AS comment FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME",
+            "SELECT TABLE_SCHEMA AS databaseName, TABLE_NAME AS tableName, COALESCE(TABLE_COMMENT, '') AS comment, COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS dataBytes FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME",
             [databaseName]
           )
         ])
@@ -2052,10 +2179,12 @@ export class ConnectionService {
             triggers: triggersByTable.get(tableKey) ?? []
           }
         })
+        const dataBytes = tableRows.reduce((sum, table) => sum + Number(table.dataBytes ?? 0), 0)
         return {
           name: databaseName,
           charset: databaseRows[0]?.charset ?? '',
           collation: databaseRows[0]?.collation ?? '',
+          dataBytes,
           tables,
           views: viewRows.map((row) => row.objectName),
           functions: [],
@@ -2127,9 +2256,38 @@ export class ConnectionService {
     const pool = getMysqlPool(connection)
     try {
       await pool.query(sql)
+      try {
+        this.repository.recordQueryRun({
+          connectionId,
+          connectionName: connection.name,
+          engine: connection.engine,
+          databaseName: connection.defaultDatabase,
+          sql,
+          success: true,
+          queryCount: 1
+        })
+        await this.refreshStatsForSql(connection, connection.defaultDatabase, sql, true)
+      } catch (recordError) {
+        console.warn('记录工作台查询统计失败：', this.errorMessage(recordError))
+      }
       return { success: true, message: successMessage }
     } catch (error) {
-      return { success: false, message: this.errorMessage(error) }
+      const message = this.errorMessage(error)
+      try {
+        this.repository.recordQueryRun({
+          connectionId,
+          connectionName: connection.name,
+          engine: connection.engine,
+          databaseName: connection.defaultDatabase,
+          sql,
+          success: false,
+          queryCount: 1,
+          errorMessage: message
+        })
+      } catch (recordError) {
+        console.warn('记录工作台查询统计失败：', this.errorMessage(recordError))
+      }
+      return { success: false, message }
     }
   }
 

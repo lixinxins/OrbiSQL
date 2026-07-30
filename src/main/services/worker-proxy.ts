@@ -29,6 +29,10 @@ export class WorkerProxy {
   private worker: Worker | null = null
   private requestId = 0
   private readonly pendingRequests = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
+  private lastActivityTime = 0
+  private idleTimer: NodeJS.Timeout | null = null
+  /** 空闲超时（毫秒）：Worker 无任务超过此时长后自动销毁以释放原生 Addon 内存 */
+  private static readonly IDLE_TIMEOUT_MS = 10 * 60 * 1000
 
   constructor(
     private readonly workerFileName: string,
@@ -37,6 +41,8 @@ export class WorkerProxy {
 
   /** 向 Worker 发送请求并等待结果 */
   send<T>(type: string, payload: Record<string, unknown>): Promise<T> {
+    this.lastActivityTime = Date.now()
+    this.clearIdleTimer()
     return new Promise<T>((resolve, reject) => {
       const id = ++this.requestId
       this.pendingRequests.set(id, { resolve: resolve as (value: unknown) => void, reject })
@@ -46,6 +52,7 @@ export class WorkerProxy {
 
   /** 关闭 Worker 线程 */
   async shutdown(): Promise<void> {
+    this.clearIdleTimer()
     if (this.worker) {
       await this.worker.terminate()
       this.worker = null
@@ -53,7 +60,7 @@ export class WorkerProxy {
     }
   }
 
-  /** 获取或创建 Worker 实例（懒初始化单例） */
+  /** 获取或创建 Worker 实例（懒初始化单例，带 V8 堆大小限制） */
   private getWorker(): Worker {
     if (!this.worker) {
       const workerPath = join(__dirname, this.workerFileName)
@@ -68,10 +75,13 @@ export class WorkerProxy {
         this.pendingRequests.delete(msg.id)
         if (msg.ok) pending.resolve(msg.result)
         else pending.reject(new Error(msg.error ?? 'Worker 未知错误'))
+
+        // 任务完成后启动空闲检测定时器
+        if (this.pendingRequests.size === 0) this.scheduleIdleCheck()
       })
 
       this.worker.on('error', (error) => {
-        // Worker 崩溃时拒绝所有待处理请求
+        console.warn(`[WorkerProxy] Worker "${this.workerFileName}" error:`, error.message)
         for (const [, pending] of this.pendingRequests) {
           pending.reject(error)
         }
@@ -80,8 +90,6 @@ export class WorkerProxy {
       })
 
       this.worker.on('exit', (code) => {
-        // Worker 因 OOM 或 process.exit() 退出时（可能不触发 error 事件），
-        // 必须拒绝所有待处理请求，否则 Promise 将永久 pending 致界面卡死
         if (this.worker === null) return
         const error = new Error(`Worker 意外退出，code=${code}`)
         for (const [, pending] of this.pendingRequests) {
@@ -92,5 +100,27 @@ export class WorkerProxy {
       })
     }
     return this.worker
+  }
+
+  /** 调度空闲检测：超时后销毁 Worker 以释放原生 Addon 内存 */
+  private scheduleIdleCheck(): void {
+    this.clearIdleTimer()
+    this.lastActivityTime = Date.now()
+    this.idleTimer = setTimeout(() => {
+      const idleTime = Date.now() - this.lastActivityTime
+      if (this.pendingRequests.size === 0 && this.worker && idleTime >= WorkerProxy.IDLE_TIMEOUT_MS) {
+        console.log(`[WorkerProxy] Worker "${this.workerFileName}" idle for ${WorkerProxy.IDLE_TIMEOUT_MS / 1000}s, destroying to free memory.`)
+        this.worker.terminate().catch(() => {})
+        this.worker = null
+      }
+    }, WorkerProxy.IDLE_TIMEOUT_MS)
+    this.idleTimer.unref()
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer)
+      this.idleTimer = null
+    }
   }
 }

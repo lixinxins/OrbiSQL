@@ -100,11 +100,14 @@ const parseMongoQuery = (text: string): { filter: Record<string, unknown>; optio
 // ── MongoDB client cache ──────────────────────────────────────────────
 
 const mongoClients = new Map<string, MongoClient>()
+const mongoLastAccess = new Map<string, number>()
 
 const getMongoClient = async (connection: AdapterConnection): Promise<MongoClient> => {
-  const key = `${connection.host}:${connection.port}:${connection.username}`
+  const key = connection.id != null && connection.id > 0
+    ? `id:${connection.id}`
+    : `${connection.host}:${connection.port}:${connection.username}`
   const existing = mongoClients.get(key)
-  if (existing) return existing
+  if (existing) { mongoLastAccess.set(key, Date.now()); return existing }
 
   const authSource = connection.defaultDatabase || 'admin'
   let uri: string
@@ -126,15 +129,30 @@ const getMongoClient = async (connection: AdapterConnection): Promise<MongoClien
   })
   await client.connect()
   mongoClients.set(key, client)
+  mongoLastAccess.set(key, Date.now())
   return client
 }
 
 export const closeMongoClients = async (connection: AdapterConnection): Promise<void> => {
-  const prefix = `${connection.host}:${connection.port}:${connection.username}`
+  const prefix = connection.id != null && connection.id > 0
+    ? `id:${connection.id}`
+    : `${connection.host}:${connection.port}:${connection.username}`
   for (const [key, client] of mongoClients) {
-    if (key.startsWith(prefix)) {
+    if (key === prefix) {
       try { await client.close() } catch { /* ignore */ }
       mongoClients.delete(key)
+    }
+  }
+}
+
+/** 驱逐空闲超过 maxIdleMs 的客户端 */
+export const evictIdleMongoClients = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  for (const [key, client] of mongoClients) {
+    if (now - (mongoLastAccess.get(key) ?? 0) > maxIdleMs) {
+      try { await client.close() } catch { /* ignore */ }
+      mongoClients.delete(key)
+      mongoLastAccess.delete(key)
     }
   }
 }
@@ -224,6 +242,7 @@ export const executeMongoQuery = async (connection: AdapterConnection, databaseN
       let cursorId: string | undefined
       if (truncated) {
         const cursor = createCursor({
+          connectionId: connection.id,
           engine: 'MongoDB',
           connectionKey: `${connection.host}:${connection.port}/${dbName}`,
           databaseName: dbName,

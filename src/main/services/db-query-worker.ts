@@ -33,6 +33,9 @@ const buildSsl = (config: SslConfig): { rejectUnauthorized: boolean; ca?: Buffer
 const mysqlPools = new Map<string, mysql.Pool>()
 const pgPools = new Map<string, PgPool>()
 
+const connectionPoolKey = (config: { id?: number; host: string; port: number; username: string }): string =>
+  config.id != null && config.id > 0 ? `id:${config.id}` : `${config.host}:${config.port}:${config.username}`
+
 const getMysqlPool = (poolKey: string, config: SslConfig & { host: string; port: number; username: string; password: string }, databaseName: string): mysql.Pool => {
   const key = `${poolKey}/${databaseName}`
   let pool = mysqlPools.get(key)
@@ -143,7 +146,7 @@ async function handleMessage(type: string, payload: Record<string, unknown>): Pr
       const { sessionId, config, databaseName } = payload as {
         sessionId: string; config: SslConfig & { host: string; port: number; username: string; password: string }; databaseName: string
       }
-      const pool = getMysqlPool(`${config.host}:${config.port}:${config.username}`, config, databaseName)
+      const pool = getMysqlPool(connectionPoolKey(config), config, databaseName)
       const connection = await pool.getConnection()
       await connection.beginTransaction()
       txConnections.set(sessionId, { engine: 'MySQL', connection })

@@ -1,6 +1,6 @@
 # 参与贡献
 
-感谢你对 OrbiSQL 的关注。Bug 修复、数据库适配、交互改进、文档完善和测试补充都非常欢迎。
+感谢你对 QuillDB 的关注。Bug 修复、数据库适配、交互改进、文档完善和测试补充都非常欢迎。
 
 ## 开始之前
 
@@ -11,8 +11,8 @@
 ## 开发流程
 
 ```bash
-git clone https://github.com/lixinxins/OrbiSQL.git
-cd OrbiSQL
+git clone https://github.com/lixinxins/QuillDB.git
+cd QuillDB
 yarn install
 yarn dev
 ```

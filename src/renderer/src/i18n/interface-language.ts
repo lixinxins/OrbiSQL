@@ -11,7 +11,7 @@ let currentLanguage: AppLanguage = 'zh-CN'
 let observer: MutationObserver | null = null
 
 const english: Record<string, string> = {
-  '新建连接': 'New connection', '新建查询': 'New query', '工作台': 'Workbench', '开始使用 QuillDB': 'Get started with QuillDB',
+  '新建连接': 'New connection', '新建查询': 'New query', '智能工作台': 'Smart Workbench', '开始使用 QuillDB': 'Get started with QuillDB',
   '关闭当前': 'Close current', '关闭其他': 'Close others', '关闭左侧': 'Close tabs to the left', '关闭右侧': 'Close tabs to the right',
   '正在加载连接列表': 'Loading connections',
   '从左侧选择一个数据库，或创建新连接来管理你的数据。': 'Select a database on the left, or create a connection to manage your data.',

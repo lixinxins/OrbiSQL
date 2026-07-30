@@ -226,7 +226,7 @@ export default function ImportConfigDialog({
               <strong style={{ display: 'block', fontSize: 14, marginBottom: 4 }}>
                 {loadingFile ? '正在读取配置文件…' : '点击选择 JSON 配置文件'}
               </strong>
-              <span style={{ fontSize: 12, color: 'var(--text-muted, #64748b)' }}>支持读取并预览 OrbiSQL 导出的格式化连接备份</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted, #64748b)' }}>支持读取并预览 QuillDB 导出的格式化连接备份</span>
             </div>
           )}
 

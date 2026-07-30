@@ -76,7 +76,26 @@
       "buildResources": "resources"
     },
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "package.json",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,LICENSE,LICENSE.txt,license.txt}",
+      "!**/node_modules/*/{test,__tests__,tests,example,examples,docs,.github}",
+      "!**/node_modules/**/*.d.ts",
+      "!**/node_modules/**/*.map",
+      "!**/node_modules/**/.bin",
+      "!**/node_modules/**/*.c",
+      "!**/node_modules/**/*.h",
+      "!**/node_modules/**/*.cc",
+      "!**/node_modules/**/*.cpp",
+      "!**/node_modules/**/*.o",
+      "!**/node_modules/**/binding.gyp",
+      "!**/node_modules/**/Makefile",
+      "!**/node_modules/**/CMakeLists.txt",
+      "!src/**/*",
+      "!electron.vite.config.ts",
+      "!tsconfig*.json",
+      "!vite.harmony.config.ts",
+      "!release/**/*"
     ],
     "extraResources": [
       {

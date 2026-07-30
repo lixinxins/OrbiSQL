@@ -34,7 +34,8 @@ import type {
   TransferTableDataInput,
   UpdateConnectionInput,
   UpdateDatabaseInput,
-  UpdateTableInput
+  UpdateTableInput,
+  WorkspaceStats
 } from '../shared/connections'
 import type { AiAgentRequest, AiAgentResponse, AiExecuteProposalRequest, AiModelActionResult, AiModelPreset, AiSaveModelInput, AiStoredModel } from '../shared/ai-agent'
 import type { SshFileActionResult, SshFileEntry, SshFileListResult } from '../shared/ssh-files'
@@ -74,6 +75,7 @@ contextBridge.exposeInMainWorld('omnidb', {
     listGroups: (): Promise<ConnectionGroup[]> => ipcRenderer.invoke(IpcChannel.connections.listGroups),
     createGroup: (name: string, category?: 'database' | 'ssh'): Promise<ConnectionActionResult> => ipcRenderer.invoke(IpcChannel.connections.createGroup, name, category),
     deleteGroup: (id: number): Promise<ConnectionActionResult> => ipcRenderer.invoke(IpcChannel.connections.deleteGroup, id),
+    renameGroup: (id: number, name: string): Promise<ConnectionActionResult> => ipcRenderer.invoke(IpcChannel.connections.renameGroup, id, name),
     setGroup: (connectionId: number, groupId: number | null): Promise<ConnectionActionResult> => ipcRenderer.invoke(IpcChannel.connections.setGroup, connectionId, groupId),
     selectSqliteFile: (engine?: string): Promise<string | null> => ipcRenderer.invoke(IpcChannel.connections.selectSqliteFile, engine),
     selectSecurityFile: (kind: ConnectionSecurityFileKind): Promise<string | null> => ipcRenderer.invoke(IpcChannel.connections.selectSecurityFile, kind),
@@ -208,5 +210,16 @@ contextBridge.exposeInMainWorld('omnidb', {
       ipcRenderer.on(channel, listener)
       return () => ipcRenderer.removeListener(channel, listener)
     }
+  },
+  memory: {
+    getStats: (): Promise<{ rssMB: number; heapTotalMB: number; heapUsedMB: number; externalMB: number; arrayBuffersMB: number; timestamp: number }> =>
+      ipcRenderer.invoke(IpcChannel.memory.getStats),
+    takeHeapSnapshot: (): Promise<string> =>
+      ipcRenderer.invoke(IpcChannel.memory.takeHeapSnapshot),
+    forceGc: (): Promise<{ success: boolean; message: string }> =>
+      ipcRenderer.invoke(IpcChannel.memory.forceGc)
+  },
+  workspace: {
+    getStats: (range?: '7d' | '30d' | '90d'): Promise<WorkspaceStats> => ipcRenderer.invoke(IpcChannel.workspace.getStats, range)
   }
 })

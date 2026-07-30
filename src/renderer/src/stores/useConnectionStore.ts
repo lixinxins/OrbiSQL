@@ -27,6 +27,8 @@ export interface ConnectionState {
     setConnectionEnvironment: (connection: DatabaseConnection, environment: ConnectionEnvironment | null, color?: string) => Promise<void>
     exportConfig: (options?: { targetPath?: string; selectedIds?: number[]; includePasswords?: boolean }) => Promise<{ success: boolean; message: string; filePath?: string }>
     importConfig: (options?: { filePath?: string; sourcePath?: string; groups?: Array<{ name: string; category?: 'database' | 'ssh' }>; connections?: Array<import('@/shared/connections').CreateConnectionInput & { groupName?: string }> }) => Promise<{ success: boolean; message: string }>
+    mergeDatabaseDetail: (connectionId: number, databaseDetail: DatabaseItem) => void
+    loadDatabaseMetadata: (connectionId: number, databaseName: string) => Promise<DatabaseItem | null>
     updateSortOrders: (orders: Array<{ id: number; sortOrder: number }>) => Promise<{ success: boolean; message: string }>
   }
 }
@@ -257,6 +259,28 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
         await get().actions.loadConnections()
       }
       return res
+    },
+
+    mergeDatabaseDetail: (connectionId, databaseDetail) => {
+      set((state) => ({
+        connections: state.connections.map((c) => {
+          if (c.id !== connectionId) return c
+          const exists = c.databases.some((db) => db.name === databaseDetail.name)
+          return {
+            ...c,
+            databases: exists
+              ? c.databases.map((db) => (db.name === databaseDetail.name ? databaseDetail : db))
+              : [...c.databases, databaseDetail]
+          }
+        })
+      }))
+    },
+
+    loadDatabaseMetadata: async (connectionId, databaseName) => {
+      const detail = await window.omnidb.connections.readDatabaseDetail(connectionId, databaseName)
+      if (!detail) return null
+      get().actions.mergeDatabaseDetail(connectionId, detail)
+      return detail
     },
 
     updateSortOrders: async (orders) => {

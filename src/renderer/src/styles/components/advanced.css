@@ -36,11 +36,11 @@
 .ai-sql-proposal > header em { padding: 2px 6px; border-radius: 8px; background: rgba(16, 185, 129, .15); color: #10b981; font-size: 9.5px; font-style: normal; }
 .ai-sql-proposal.write > header em { background: rgba(245, 158, 11, .15); color: #f59e0b; }
 .ai-sql-proposal.dangerous > header em { background: rgba(239, 68, 68, .15); color: #ef4444; }
-.ai-sql-proposal pre { max-height: 180px; overflow: auto; margin: 0; padding: 11px; background: var(--bg-base); color: var(--text-secondary); font: 11.5px/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
+.ai-sql-proposal pre { max-height: 180px; overflow: auto; margin: 0; padding: 11px; background: var(--bg-elevated); color: var(--text-secondary); font: 11.5px/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
 .ai-sql-proposal > button { height: 31px; display: flex; align-items: center; gap: 5px; margin: 0 9px 9px auto; padding: 0 10px; border: 1px solid #f59e0b; border-radius: 6px; background: rgba(245, 158, 11, .15); color: #f59e0b; font-size: 10.5px; cursor: pointer; }
 .ai-sql-proposal.dangerous > button { border-color: #ef4444; background: rgba(239, 68, 68, .15); color: #ef4444; }
 .ai-sql-proposal > button svg { width: 13px; height: 13px; }
-.ai-result-preview { margin-top: 10px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-base); }
+.ai-result-preview { margin-top: 10px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); }
 .ai-result-preview > div:first-child { height: 30px; display: flex; align-items: center; justify-content: space-between; padding: 0 9px; border-bottom: 1px solid var(--border); background: var(--bg-surface); color: var(--muted); font-size: 10.5px; }
 .ai-result-table-wrap { max-height: 260px; overflow: auto; }
 .ai-result-preview table { min-width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 11px; }
@@ -56,7 +56,7 @@
 .ai-thinking span { margin-left: 5px; font-size: 11px; }
 @keyframes ai-thinking-dot { to { opacity: .28; transform: translateY(-2px); } }
 .ai-composer { min-height: 154px; flex: 0 0 auto; position: relative; z-index: 5; padding: 10px 16px 12px; border-top: 1px solid var(--border); background: var(--bg-surface); }
-.ai-composer-box { width: 100%; margin: 0 auto; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-base); box-shadow: 0 3px 12px rgba(0, 0, 0, .05); transition: border-color 140ms ease, box-shadow 140ms ease; }
+.ai-composer-box { width: 100%; margin: 0 auto; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated); box-shadow: 0 3px 12px rgba(0, 0, 0, .05); transition: border-color 140ms ease, box-shadow 140ms ease; }
 .ai-composer-box:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-surface); }
 .ai-composer textarea { width: 100%; height: 96px; display: block; resize: none; padding: 13px 15px 9px; border: 0; border-radius: 12px 12px 0 0; outline: 0; background: transparent; color: var(--text); font: 13px/1.55 inherit; }
 .ai-composer textarea:disabled { background: var(--bg-hover); }
@@ -72,7 +72,7 @@
 
 .table-info-dialog { width: min(720px, 95vw); }
 .table-info-tabs { padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--bg-surface); }
-.table-info-body { min-height: 380px; max-height: min(560px, 68vh); overflow-y: auto; padding: 18px; background: var(--bg-base); }
+.table-info-body { min-height: 380px; max-height: min(560px, 68vh); overflow-y: auto; padding: 18px; background: var(--bg-elevated); }
 .table-info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; background: transparent; }
 .table-info-grid dl { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-surface); font-size: 12px; }
 .table-info-grid dt { color: var(--muted); }
@@ -83,7 +83,7 @@
 .ai-composer-model { width: min(210px, 35%); flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
 .ai-composer-model > svg { width: 15px; height: 15px; flex: 0 0 15px; color: var(--primary-light); }
 .ai-composer-model .searchable-select-input input { width: 100%; height: 28px; padding: 0 29px 0 8px; border: 0; border-radius: 7px; outline: 0; background: var(--bg-elevated); color: var(--text-secondary); font-size: 10.5px; text-overflow: ellipsis; }
-.ai-composer-model .searchable-select.open input { padding-left: 28px; border-color: var(--primary); background: var(--bg-base); box-shadow: 0 0 0 3px var(--primary-surface); }
+.ai-composer-model .searchable-select.open input { padding-left: 28px; border-color: var(--primary); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--primary-surface); }
 .ai-composer-model .select-search-icon, .ai-composer-model .select-caret { top: 7px; width: 14px; height: 14px; }
 .ai-composer-model .searchable-options { top: auto; bottom: calc(100% + 5px); width: max(100%, 220px); transform-origin: bottom center; }
 
@@ -325,27 +325,30 @@
 .export-sql-truncated-notice { padding: 8px 12px; border-radius: 7px; background: rgba(245, 158, 11, .1); border: 1px solid rgba(245, 158, 11, .25); color: #d97706; font-size: 11px; text-align: center; }
 
 /* Connection Type Card Layout Styles */
-.connection-type-body { padding: 22px; }
+.connection-type-body { padding: 24px; background: linear-gradient(180deg, rgba(247,250,254,.72), rgba(255,255,255,.86)); }
 .connection-type-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; width: 100%; }
-.connection-type-card { display: flex; flex-direction: column; justify-content: space-between; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated); cursor: pointer; transition: all .2s ease; outline: 0; min-height: 180px; }
-.connection-type-card:hover, .connection-type-card:focus-visible { border-color: var(--primary); background: var(--bg-surface); transform: translateY(-2px); box-shadow: 0 12px 30px rgba(0,0,0,.15); }
+.connection-type-card { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 18px; padding: 22px; border: 1px solid rgba(61,87,122,.12); border-radius: 18px; background: rgba(255,255,255,.78); cursor: pointer; transition: all .2s ease; outline: 0; min-height: 220px; overflow: hidden; box-shadow: inset 0 1px 0 rgba(255,255,255,.85); }
+.connection-type-card::after { content: ""; position: absolute; width: 118px; height: 118px; right: -42px; bottom: -48px; border-radius: 50%; background: rgba(52,127,240,.09); filter: blur(4px); }
+.connection-type-card.ssh-card::after { background: rgba(117,89,232,.1); }
+.connection-type-card:hover, .connection-type-card:focus-visible { border-color: rgba(52,127,240,.32); background: #fff; transform: translateY(-3px); box-shadow: 0 18px 42px rgba(52,77,111,.14); }
 
 .connection-type-card-header { display: flex; align-items: center; justify-content: space-between; }
-.connection-card-icon { width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center; background: var(--primary-surface); color: var(--primary-light); flex-shrink: 0; }
+.connection-card-icon { width: 50px; height: 50px; border-radius: 16px; display: grid; place-items: center; background: #eaf3ff; color: #347ff0; flex-shrink: 0; box-shadow: 0 12px 24px rgba(52,127,240,.12); }
 .connection-card-icon svg { width: 24px; height: 24px; }
-.connection-card-icon.ssh { background: rgba(99, 102, 241, .15); color: #818cf8; }
+.connection-card-icon.ssh { background: rgba(117,89,232,.12); color: #7559e8; }
 
-.connection-card-badge { padding: 3px 9px; border-radius: 999px; background: var(--bg-base); border: 1px solid var(--border); color: var(--muted); font-size: 10.5px; font-weight: 650; }
-.connection-card-badge.ssh { background: rgba(99, 102, 241, .12); color: #818cf8; border-color: rgba(99, 102, 241, .25); }
+.connection-card-badge { padding: 4px 10px; border-radius: 999px; background: #eaf3ff; border: 1px solid rgba(52,127,240,.14); color: #347ff0; font-size: 10.5px; font-weight: 760; }
+.connection-card-badge.ssh { background: rgba(117,89,232,.1); color: #7559e8; border-color: rgba(117,89,232,.18); }
 
-.connection-type-card-content h3 { margin: 0 0 6px; color: var(--text); font-size: 16px; font-weight: 650; }
-.connection-type-card-content p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.connection-type-card-content { position: relative; z-index: 1; }
+.connection-type-card-content h3 { margin: 0 0 8px; color: #162033; font-size: 18px; font-weight: 800; letter-spacing: -.025em; }
+.connection-type-card-content p { margin: 0; color: #66738a; font-size: 12px; line-height: 1.65; }
 
-.connection-type-card-footer { display: flex; align-items: center; justify-content: space-between; color: var(--primary); font-size: 12px; font-weight: 650; margin-top: 4px; }
+.connection-type-card-footer { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; color: #347ff0; font-size: 12px; font-weight: 780; margin-top: 4px; }
 .connection-type-card-footer svg { width: 14px; height: 14px; transition: transform .2s ease; }
 .connection-type-card:hover .connection-type-card-footer svg { transform: translateX(3px); }
 
-.dialog-icon.ssh { background: rgba(99, 102, 241, .15); color: #818cf8; }
+.dialog-icon.ssh { background: linear-gradient(145deg, #8a7cff, #7559e8); color: #fff; }
 
 .icon-back-btn { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; flex-shrink: 0; margin-right: 4px; }
 .icon-back-btn:hover { background: var(--bg-hover); color: var(--text); }
@@ -712,4 +715,29 @@ button.connection-section-header:hover .section-caret {
 @keyframes ssh-drag-fade {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+/* ══════════════════════════════════════════════════════════
+   Classic 深色主题 — 智能工作台适配
+   ══════════════════════════════════════════════════════════ */
+:root[data-theme='classic'] .ai-composer-box {
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .35);
+}
+:root[data-theme='classic'] .ai-message-content {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .30);
+}
+:root[data-theme='classic'] .ai-sql-proposal > header em {
+  background: rgba(16, 185, 129, .22);
+}
+:root[data-theme='classic'] .ai-sql-proposal.write > header em {
+  background: rgba(245, 158, 11, .22);
+}
+:root[data-theme='classic'] .ai-sql-proposal.dangerous > header em {
+  background: rgba(239, 68, 68, .22);
+}
+:root[data-theme='classic'] .ai-result-notice.success {
+  background: rgba(16, 185, 129, .22);
+}
+:root[data-theme='classic'] .ai-result-notice.error {
+  background: rgba(239, 68, 68, .22);
 }

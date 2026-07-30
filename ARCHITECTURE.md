@@ -1,8 +1,8 @@
-# OrbiSQL (OmniDB) 项目架构文档
+# QuillDB 项目架构文档
 
 ## 一、项目概述
 
-OrbiSQL 是一款跨平台桌面数据库管理工具，基于 **Electron + React + TypeScript** 构建，同时支持鸿蒙 (HarmonyOS) 移动端。支持 14 种主流数据库引擎，提供 SQL 编辑器、表数据浏览、SSH 隧道、AI 辅助 SQL 生成、数据导入导出等能力。
+QuillDB 是一款跨平台桌面数据库工作台，基于 **Electron + React + TypeScript** 构建，同时包含实验性的鸿蒙 (HarmonyOS) 客户端。系统内置 14 种数据库引擎连接能力，并提供分层对象浏览、SQL 编辑与执行、执行计划、可编辑结果集、表结构设计、SSH/SFTP、AI 数据库助手以及数据导入导出等能力。
 
 ---
 
@@ -28,7 +28,7 @@ OrbiSQL 是一款跨平台桌面数据库管理工具，基于 **Electron + Reac
 
 ## 三、进程架构
 
-OrbiSQL 遵循 Electron 经典的三进程架构：
+QuillDB 遵循 Electron 经典的三进程架构：
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

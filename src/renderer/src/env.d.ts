@@ -25,7 +25,8 @@ import type {
   TransferTableDataInput,
   UpdateConnectionInput,
   UpdateDatabaseInput,
-  UpdateTableInput
+  UpdateTableInput,
+  WorkspaceStats
 } from '../../shared/connections'
 import type { AiAgentRequest, AiAgentResponse, AiExecuteProposalRequest, AiModelActionResult, AiModelPreset, AiSaveModelInput, AiStoredModel } from '../../shared/ai-agent'
 import type { SshFileActionResult, SshFileEntry, SshFileListResult } from '../../shared/ssh-files'
@@ -62,6 +63,7 @@ declare global {
         listGroups: () => Promise<ConnectionGroup[]>
         createGroup: (name: string, category?: 'database' | 'ssh') => Promise<ConnectionActionResult>
         deleteGroup: (id: number) => Promise<ConnectionActionResult>
+        renameGroup: (id: number, name: string) => Promise<ConnectionActionResult>
         setGroup: (connectionId: number, groupId: number | null) => Promise<ConnectionActionResult>
         selectSqliteFile: (engine?: string) => Promise<string | null>
         selectSecurityFile: (kind: ConnectionSecurityFileKind) => Promise<string | null>
@@ -125,6 +127,14 @@ declare global {
         getDefinition: (connectionId: number, databaseName: string, tableName: string) => Promise<TableDefinitionResult>
         update: (input: UpdateTableInput) => Promise<ConnectionActionResult>
         rename: (input: RenameTableInput) => Promise<ConnectionActionResult>
+      }
+      memory: {
+        getStats: () => Promise<{ rssMB: number; heapTotalMB: number; heapUsedMB: number; externalMB: number; arrayBuffersMB: number; timestamp: number }>
+        takeHeapSnapshot: () => Promise<string>
+        forceGc: () => Promise<{ success: boolean; message: string }>
+      }
+      workspace: {
+        getStats: (range?: '7d' | '30d' | '90d') => Promise<WorkspaceStats>
       }
       ssh: {
         connect: (options: {

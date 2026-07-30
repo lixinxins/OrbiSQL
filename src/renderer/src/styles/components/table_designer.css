@@ -5,12 +5,12 @@
 .searchable-empty { padding: 16px 8px; color: var(--text-subtle); font-size: 12px; text-align: center; }
 .table-dialog { width: min(1060px, 96vw); }
 .table-dialog-icon { background: var(--primary-surface); color: var(--primary-light, var(--primary)); }
-.table-designer-workspace { min-width: 0; overflow: hidden; container-type: inline-size; background: var(--bg-base); }
+.table-designer-workspace { min-width: 0; overflow: hidden; container-type: inline-size; }
 .table-designer-window-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .table-designer-tab { min-width: 180px; width: min(240px, 45cqw); flex: 0 0 auto; border-top-color: transparent; background: var(--bg-surface); color: var(--muted); cursor: pointer; transition: all 150ms ease; }
-.table-designer-tab.active { border-top-color: var(--primary); background: var(--bg-base); color: var(--text); font-weight: 600; }
+.table-designer-tab.active { border-top-color: var(--primary); background: var(--bg-elevated); color: var(--text); font-weight: 600; }
 .table-designer-tab > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.table-designer { min-width: 0; min-height: 0; flex: 1; display: none; flex-direction: column; overflow: hidden; background: var(--bg-base); }
+.table-designer { min-width: 0; min-height: 0; flex: 1; display: none; flex-direction: column; overflow: hidden; }
 .table-designer.active { display: flex; }
 .table-designer-context { height: 36px; flex: 0 0 36px; display: flex; align-items: center; gap: 8px; padding: 0 18px; border-bottom: 1px solid var(--soft-border); background: var(--bg-surface); color: var(--muted); font-size: 12px; }
 .table-designer-context i { color: var(--text-subtle); font-style: normal; }
@@ -34,7 +34,7 @@
 .table-tabs::-webkit-scrollbar { display: none; }
 .table-tabs button { min-width: 100px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 120ms ease; }
 .table-tabs button:hover { color: var(--text); }
-.table-tabs button.active { border-bottom-color: var(--primary); background: var(--bg-base); color: var(--primary-light, var(--primary)); font-weight: 650; }
+.table-tabs button.active { border-bottom-color: var(--primary); background: var(--bg-elevated); color: var(--primary-light, var(--primary)); font-weight: 650; }
 .table-tabs button svg { width: 15px; height: 15px; }
 .table-tabs button span { min-width: 18px; padding: 1px 6px; border-radius: 8px; background: var(--bg-elevated); color: var(--muted); font-size: 10px; font-weight: 600; }
 .table-tabs button.active span { background: var(--primary-surface); color: var(--primary-light, var(--primary)); }

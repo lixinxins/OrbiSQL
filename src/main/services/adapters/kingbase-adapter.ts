@@ -80,11 +80,13 @@ const filterKb = (filter: TableDataFilter): string => {
 // ── KingbaseES pool cache ─────────────────────────────────────────────
 
 const kbPools = new Map<string, Pool>()
+const kbLastAccess = new Map<string, number>()
 
 export const getKbPool = async (connection: AdapterConnection): Promise<Pool> => {
-  const key = `${connection.host}:${connection.port}:${connection.username}:${connection.defaultDatabase}`
+  const identity = connection.id != null && connection.id > 0 ? `id:${connection.id}` : `${connection.host}:${connection.port}:${connection.username}`
+  const key = `${identity}:${connection.defaultDatabase}`
   const existing = kbPools.get(key)
-  if (existing) return existing
+  if (existing) { kbLastAccess.set(key, Date.now()); return existing }
 
   const pool = new Pool({
     host: connection.host,
@@ -98,15 +100,30 @@ export const getKbPool = async (connection: AdapterConnection): Promise<Pool> =>
     connectionTimeoutMillis: 5000
   })
   kbPools.set(key, pool)
+  kbLastAccess.set(key, Date.now())
   return pool
 }
 
 export const closeKbPools = async (connection: AdapterConnection): Promise<void> => {
-  const prefix = `${connection.host}:${connection.port}:${connection.username}`
+  const prefix = connection.id != null && connection.id > 0
+    ? `id:${connection.id}:`
+    : `${connection.host}:${connection.port}:${connection.username}:`
   for (const [key, pool] of kbPools) {
     if (key.startsWith(prefix)) {
       try { await pool.end() } catch { /* ignore */ }
       kbPools.delete(key)
+    }
+  }
+}
+
+/** 驱逐空闲超过 maxIdleMs 的连接池 */
+export const evictIdleKbPools = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  for (const [key, pool] of kbPools) {
+    if (now - (kbLastAccess.get(key) ?? 0) > maxIdleMs) {
+      try { await pool.end() } catch { /* ignore */ }
+      kbPools.delete(key)
+      kbLastAccess.delete(key)
     }
   }
 }
@@ -251,9 +268,9 @@ export const executeKbQuery = async (connection: AdapterConnection, databaseName
     const endTime = new Date().toISOString()
     const durationMs = Math.round(performance.now() - startMs)
 
-    if (result.rows && result.rows.length > 0) {
+    if (result.fields.length > 0) {
       const rows = result.rows as Array<Record<string, unknown>>
-      const columns = Object.keys(rows[0])
+      const columns = result.fields.map((field) => field.name)
       const truncated = isSelect && rows.length >= QUERY_ROW_LIMIT
 
       let editable: QueryExecutionResult['editable']
@@ -282,6 +299,7 @@ export const executeKbQuery = async (connection: AdapterConnection, databaseName
       let cursorId: string | undefined
       if (truncated) {
         const cursor = createCursor({
+          connectionId: connection.id,
           engine: '人大金仓',
           connectionKey: `${connection.host}:${connection.port}/${databaseName}`,
           databaseName, sql: sqlText, columns, editable,

@@ -4,14 +4,12 @@
  * 从原始 1157 行单体文件拆分而来，当前仅负责状态编排和组件组合。
  */
 import { useEffect, useRef, useState } from 'react'
-import { ArrowsInLineHorizontal, BookmarksSimple, CaretDown, ChartBar, Check, ClockCounterClockwise, FloppyDisk, Lightning, Play, TextAlignLeft, Trash, WarningCircle } from '@phosphor-icons/react'
+import { ArrowsInLineHorizontal, BookmarksSimple, CaretDown, ChartBar, Check, ClockCounterClockwise, Copy, FloppyDisk, Play, TextAlignLeft, Trash, WarningCircle } from '@phosphor-icons/react'
 import type { DatabaseConnection } from '@/shared/connections'
 import { useConfirmDialog } from '../ConfirmDialog'
 import SaveQueryDialog from '../SaveQueryDialog'
 import SearchableSelect from '../SearchableSelect'
 import SqlEditor from '../SqlEditor'
-import { useGlobalCloseMenu } from '../../hooks/useGlobalCloseMenu'
-import { PRESET_SNIPPETS } from './utils/snippets'
 import { usePanelResize } from './hooks/usePanelResize'
 import { useColumnResize } from './hooks/useColumnResize'
 import { useQueryHistory } from './hooks/useQueryHistory'
@@ -70,6 +68,9 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
   // databaseKey 用 \u0000 分隔 connectionId 和 databaseName，作为下拉框的唯一 value
   const [databaseKey, setDatabaseKey] = useState(initialDatabaseKey)
   const [sql, setSql] = useState(context.initialSql ?? '')
+  const [selectedSql, setSelectedSql] = useState('')
+  const [currentStatement, setCurrentStatement] = useState('')
+  const [lastExecutedSql, setLastExecutedSql] = useState(context.initialSql ?? '')
   const onSqlChangeRef = useRef(onSqlChange)
   onSqlChangeRef.current = onSqlChange
   useEffect(() => { onSqlChangeRef.current?.(sql) }, [sql]) // P3: 同步 SQL 到父组件缓存
@@ -85,9 +86,6 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
   const [resultPanelCollapsed, setResultPanelCollapsed] = useState(false)
   const [cursorPosition, setCursorPosition] = useState({ line: 1, column: 1 })
   const { sqlHistory, setSqlHistory, showHistory, setShowHistory, historyHostRef } = useQueryHistory()
-  const [showSnippets, setShowSnippets] = useState(false)
-  const snippetsCloseTs = useRef(0)
-  const snippetsHostRef = useRef<HTMLDivElement>(null)
 
   // 从连接列表派生数据库下拉选项（仅包含已连接的数据库）
   const databaseOptions = useDatabaseOptions(connections)
@@ -99,8 +97,7 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
 
   const {
     running, result, setResult, loadingMore,
-    transactionActive, transactionBusy,
-    execute, executeExplain, handleLoadMore, beginTransaction, finishTransaction
+    execute, executeExplain, handleLoadMore
   } = useQueryExecution({
     sessionId, connectionId, databaseName,
     sql, engine: selectedConnection?.engine,
@@ -130,25 +127,34 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
     savedQueriesHostRef, openSaveQueryDialog, saveQuery, deleteSavedQuery
   } = useSavedQueries({ connectionId, databaseName, sql, setSql, setResult, editorRef, confirm, active })
 
-  // 点击外部关闭下拉菜单
-  useGlobalCloseMenu(showSnippets, () => { snippetsCloseTs.current = Date.now(); setShowSnippets(false) })
-
   const completionCandidates = useCompletionCandidates(selectedDatabase)
   const { formatSql, compressSql } = useSqlFormatter(sql, setSql, selectedConnection?.engine, editorRef, setFormatError)
 
   const { columnWidthMap, handleColumnResizeStart } = useColumnResize(result?.columns, result?.rows)
+  const runnableSelection = selectedSql.trim()
+  const runQuery = (sqlOverride?: string): void => {
+    const sqlToExecute = sqlOverride?.trim() || sql.trim()
+    if (!sqlToExecute) return
+    setLastExecutedSql(sqlToExecute)
+    void execute(sqlOverride)
+  }
+
+  const copySelectedSql = (): void => {
+    if (!runnableSelection) return
+    void navigator.clipboard.writeText(selectedSql)
+  }
 
   return (
     <section className={`query-workspace${active ? ' active' : ''}`} ref={workspaceRef}>
       <div className="query-toolbar">
         {/* 运行按钮 */}
-        <button type="button" className="run-query" onClick={() => void execute()} disabled={running || !sql.trim()}><Play weight="fill" />{running ? '运行中…' : '运行'}</button>
-        {/* 事务控制区：BEGIN / COMMIT / ROLLBACK */}
-        <div className={`query-transaction-controls${transactionActive ? ' active' : ''}`} title={transactionActive ? '当前查询页已开启事务' : '手动事务模式'}>
-          <button type="button" onClick={() => void beginTransaction()} disabled={transactionBusy || transactionActive || !connectionId || !databaseName}>BEGIN</button>
-          <button type="button" onClick={() => void finishTransaction(true)} disabled={transactionBusy || !transactionActive}>COMMIT</button>
-          <button type="button" className="rollback" onClick={() => void finishTransaction(false)} disabled={transactionBusy || !transactionActive}>ROLLBACK</button>
-        </div>
+        <button
+          type="button"
+          className="run-query"
+          onClick={() => runQuery(runnableSelection || currentStatement || undefined)}
+          disabled={running || !sql.trim()}
+          title={runnableSelection ? '仅运行选中的 SQL（Command/Ctrl + Enter）' : '运行光标所在 SQL（Command/Ctrl + Enter）'}
+        ><Play weight="fill" />{running ? '运行中…' : runnableSelection ? '运行选中' : '运行当前'}</button>
         {/* 执行计划（EXPLAIN）按钮 */}
         <button type="button" className="format-query" onClick={() => void executeExplain()} disabled={running || !sql.trim()} title="一键分析执行计划 (EXPLAIN)"><ChartBar />执行计划</button>
         {/* 格式化 & 压缩 */}
@@ -182,31 +188,6 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
         </div>
         {/* 保存查询按钮（Cmd+S 快捷键由 useSavedQueries 管理） */}
         <button type="button" className="save-query-button" onClick={openSaveQueryDialog} disabled={!connectionId || !databaseName || !sql.trim()} title="保存查询（Command/Ctrl + S）"><FloppyDisk />保存查询</button>
-        {/* 常用 SQL 代码片段下拉菜单 */}
-        <div className="saved-query-menu-host" ref={snippetsHostRef}>
-          <button type="button" className="saved-query-toggle" onMouseDown={() => setShowSnippets((current) => !current)} onClick={(event) => event.stopPropagation()}>
-            <Lightning />常用 Snippets<CaretDown />
-          </button>
-          {showSnippets && (
-            <div className="saved-query-menu" onMouseDown={(event) => event.stopPropagation()}>
-              <header><strong>常用 SQL 代码片段</strong></header>
-              <div className="saved-query-list">
-                {PRESET_SNIPPETS.map((snippet) => (
-                  <div className="saved-query-item" key={snippet.name}>
-                    <button type="button" className="saved-query-load" onClick={() => {
-                      setSql(snippet.sql)
-                      setShowSnippets(false)
-                      requestAnimationFrame(() => editorRef.current?.focus())
-                    }}>
-                      <span><strong>{snippet.name}</strong></span>
-                      <code>{snippet.sql.replaceAll(/\s+/g, ' ').trim()}</code>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
         {/* 已保存查询列表下拉菜单 */}
         <div className="saved-query-menu-host" ref={savedQueriesHostRef}>
           <button type="button" className="saved-query-toggle" disabled={!connectionId || !databaseName} onMouseDown={() => setShowSavedQueries((current) => !current)} onClick={(event) => event.stopPropagation()}>
@@ -245,7 +226,6 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
             value={databaseKey}
             options={databaseOptions}
             placeholder="请选择数据库"
-            disabled={transactionActive}
             onChange={(value) => {
               setDatabaseKey(value)
               const [nextConnectionId, nextDatabaseName = ''] = value.split('\u0000')
@@ -260,7 +240,13 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
       {/* 验证状态栏：显示格式错误或 SQL 字段校验结果 */}
       <div className={`query-validation${formatError || validation.messages.length ? ' error' : sql.trim() ? ' valid' : ''}`}>
         {formatError || validation.messages.length ? <WarningCircle /> : <Check />}
-        <span>{formatError || (validation.messages.length ? validation.messages.join('；') : sql.trim() ? '字段检查通过' : '输入 SQL 后自动检查表和字段')}</span>
+        <span className="query-validation-message">{formatError || (validation.messages.length ? validation.messages.join('；') : sql.trim() ? '字段检查通过' : '输入 SQL 后自动检查表和字段')}</span>
+        {runnableSelection && (
+          <span className="query-selection-actions">
+            已选择 {selectedSql.length} 个字符
+            <button type="button" onClick={copySelectedSql} title="复制选中的 SQL"><Copy />复制选中</button>
+          </span>
+        )}
       </div>
       {/* SQL 编辑器区域：高度随结果面板显隐动态调整 */}
       <div
@@ -271,7 +257,9 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
           value={sql}
           onChange={(v) => { setSql(v); setFormatError('') }}
           onCursorChange={setCursorPosition}
-          onRunQuery={execute}
+          onSelectionChange={setSelectedSql}
+          onCurrentStatementChange={setCurrentStatement}
+          onRunQuery={runQuery}
           onSaveQuery={openSaveQueryDialog}
           onFormatSql={formatSql}
           onCompressSql={compressSql}
@@ -285,7 +273,7 @@ function QueryWorkspace({ sessionId, active, connections, context, onDatabaseCha
       <ResultPanel
         result={result}
         databaseName={databaseName}
-        sql={sql}
+        sql={lastExecutedSql || sql}
         resultPanelTab={resultPanelTab}
         setResultPanelTab={setResultPanelTab}
         resultDataTab={resultDataTab}

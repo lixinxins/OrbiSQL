@@ -51,11 +51,12 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon } from '@xterm/addon-search'
-import { ArrowUp, ArrowsClockwise, Copy, DownloadSimple, File, Folder, FolderOpen, Lightning, MagnifyingGlass, Trash, UploadSimple } from '@phosphor-icons/react'
+import { ArrowUp, ArrowsClockwise, Copy, DownloadSimple, File, Folder, FolderOpen, Lightning, MagnifyingGlass, Plus, Trash, UploadSimple } from '@phosphor-icons/react'
 import '@xterm/xterm/css/xterm.css'
 import type { DatabaseConnection } from '@/shared/connections'
 import type { SshFileEntry } from '@/shared/ssh-files'
 import { useConnectionStore } from '../stores/useConnectionStore'
+import { useTerminalTabsStore } from '../stores/tabs/useTerminalTabs'
 
 const PRESET_SNIPPETS = [
   { label: 'top', cmd: 'top\n' },
@@ -129,6 +130,8 @@ interface Props {
 // Component
 // ---------------------------------------------------------------------------
 export default function SshTerminalWorkspace({ connection, sessionId, active, onClose }: Props) {
+  const createSshTerminal = useTerminalTabsStore((state) => state.createSshTerminal)
+
   // ---- state ---------------------------------------------------------------
   const [connected, setConnected] = useState(false)
   const [connecting, setConnecting] = useState(false)
@@ -717,6 +720,18 @@ export default function SshTerminalWorkspace({ connection, sessionId, active, on
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <button
+            type="button"
+            title="为当前 SSH 连接新建独立会话"
+            aria-label="新建 SSH 会话"
+            onClick={() => createSshTerminal(connection)}
+            className="ssh-file-toggle"
+            style={{ ...btnBaseStyle, width: 'auto', padding: '0 7px', gap: 4 }}
+          >
+            <Plus size={14} weight="bold" />
+            <span style={{ fontSize: 11 }}>新建会话</span>
+          </button>
+          <button
+            type="button"
             title={showSnippets ? '隐藏快捷指令' : '常用快捷指令面板'}
             onClick={() => setShowSnippets((current) => !current)}
             className={`ssh-file-toggle${showSnippets ? ' active' : ''}`}

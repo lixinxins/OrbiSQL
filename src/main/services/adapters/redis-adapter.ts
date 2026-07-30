@@ -59,11 +59,13 @@ const toRows = (data: unknown): Array<Record<string, unknown>> => {
 // ── Redis client cache ────────────────────────────────────────────────
 
 const redisClients = new Map<string, Redis>()
+const redisLastAccess = new Map<string, number>()
 
 const getRedisClient = async (connection: AdapterConnection): Promise<Redis> => {
-  const key = `${connection.host}:${connection.port}:${connection.defaultDatabase}`
+  const identity = connection.id != null && connection.id > 0 ? `id:${connection.id}` : `${connection.host}:${connection.port}`
+  const key = `${identity}:${connection.defaultDatabase}`
   const existing = redisClients.get(key)
-  if (existing?.status === 'ready') return existing
+  if (existing?.status === 'ready') { redisLastAccess.set(key, Date.now()); return existing }
 
   const dbIndex = parseInt(connection.defaultDatabase || '0', 10) || 0
   const redis = new Redis({
@@ -78,15 +80,30 @@ const getRedisClient = async (connection: AdapterConnection): Promise<Redis> => 
   })
   await redis.connect()
   redisClients.set(key, redis)
+  redisLastAccess.set(key, Date.now())
   return redis
 }
 
 export const closeRedisClient = async (connection: AdapterConnection): Promise<void> => {
-  const prefix = `${connection.host}:${connection.port}`
+  const prefix = connection.id != null && connection.id > 0
+    ? `id:${connection.id}:`
+    : `${connection.host}:${connection.port}:`
   for (const [key, client] of redisClients) {
     if (key.startsWith(prefix)) {
       try { await client.quit() } catch { try { client.disconnect() } catch { /* ignore */ } }
       redisClients.delete(key)
+    }
+  }
+}
+
+/** 驱逐空闲超过 maxIdleMs 的客户端 */
+export const evictIdleRedisClients = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  for (const [key, client] of redisClients) {
+    if (now - (redisLastAccess.get(key) ?? 0) > maxIdleMs) {
+      try { await client.quit() } catch { try { client.disconnect() } catch { /* ignore */ } }
+      redisClients.delete(key)
+      redisLastAccess.delete(key)
     }
   }
 }

@@ -1,7 +1,10 @@
+import React, { useRef } from 'react'
 import { CaretDown, CaretRight, CircleNotch, Database } from '@phosphor-icons/react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { DatabaseConnection, DatabaseItem } from '@/shared/connections'
 import { useSidebarStore } from '../stores/useSidebarStore'
 import { useDatabaseTabsStore } from '../stores/tabs/useDatabaseTabs'
+import { useUIStore } from '../stores/useUIStore'
 import type { EngineTreeConfig } from '../stores/useSidebarStore'
 import TableNode from './TableNode'
 import SchemaNode from './SchemaNode'
@@ -14,16 +17,25 @@ interface DatabaseNodeProps {
   treeConfig: EngineTreeConfig
 }
 
-export default function DatabaseNode({ connection, database, databaseKey, treeConfig }: DatabaseNodeProps) {
-  const expandedDatabases = useSidebarStore((s) => s.expandedDatabases)
-  const loadingDatabases = useSidebarStore((s) => s.loadingDatabases)
-  const loadedEmptyDatabases = useSidebarStore((s) => s.loadedEmptyDatabases)
+const DatabaseNode = React.memo(function DatabaseNode({ connection, database, databaseKey, treeConfig }: DatabaseNodeProps) {
+  const databaseExpanded = useSidebarStore((s) => s.expandedDatabases.has(databaseKey))
+  const databaseLoading = useSidebarStore((s) => s.loadingDatabases.has(databaseKey))
+  const databaseEmpty = useSidebarStore((s) => s.loadedEmptyDatabases.has(databaseKey))
   const expandedGroups = useSidebarStore((s) => s.expandedGroups)
   const sidebarActions = useSidebarStore((s) => s.actions)
   const openDatabaseOverview = useDatabaseTabsStore((s) => s.openDatabaseOverview)
+  const uiActions = useUIStore((s) => s.actions)
 
-  const databaseExpanded = expandedDatabases.has(databaseKey)
-  const databaseLoading = loadingDatabases.has(databaseKey)
+  // ── Virtualized table list ─────────────────────────────
+  const tables = database.tables
+  const tablesParentRef = useRef<HTMLDivElement>(null)
+  const tableVirtualizer = useVirtualizer({
+    count: tables.length,
+    getScrollElement: () => tablesParentRef.current,
+    getItemKey: (index) => tables[index]?.name ?? index,
+    estimateSize: () => 32,
+    overscan: 10,
+  })
 
   const databaseHasMetadata = (): boolean => {
     if (database.schemas && database.schemas.length > 0) {
@@ -36,14 +48,16 @@ export default function DatabaseNode({ connection, database, databaseKey, treeCo
   }
 
   const handleDatabaseClick = async (): Promise<void> => {
-    const opening = !expandedDatabases.has(databaseKey)
+    sidebarActions.setFocusedConnectionId(connection.id)
+    uiActions.setFocusedItem({ connectionName: connection.name, databaseName: database.name, engine: connection.engine })
+    const opening = !databaseExpanded
     if (!opening) {
       toggleDatabase()
       openDatabaseOverview(connection, database)
       return
     }
 
-    const needsLoading = !databaseHasMetadata() && !loadedEmptyDatabases.has(databaseKey)
+    const needsLoading = !databaseHasMetadata() && !databaseEmpty
     if (!needsLoading) {
       toggleDatabase()
       openDatabaseOverview(connection, database)
@@ -120,6 +134,9 @@ export default function DatabaseNode({ connection, database, databaseKey, treeCo
     })
   }
 
+  const tableGroupKey = `${databaseKey}:tables`
+  const tableGroupExpanded = expandedGroups.has(tableGroupKey)
+
   return (
     <div className="database-node">
       <button
@@ -151,35 +168,49 @@ export default function DatabaseNode({ connection, database, databaseKey, treeCo
             ))
           ) : (
             <>
-              {/* Tables group */}
-              {(() => {
-                const groupKey = `${databaseKey}:tables`
-                const groupExpanded = expandedGroups.has(groupKey)
-                return (
-                  <div className="object-group">
-                    <button
-                      type="button"
-                      className="tree-row tree-section"
-                      aria-expanded={groupExpanded}
-                      onClick={() => toggleGroup(groupKey)}
-                      onContextMenu={openTableGroupContextMenu}
-                    >
-                      {groupExpanded ? <CaretDown /> : <CaretRight />}
-                      {getTableIcon()}<span className="tree-label">{treeConfig.itemLabel}</span><span>{database.tables.length}</span>
-                    </button>
-                    {groupExpanded && database.tables.map((table) => (
-                      <TableNode
-                        key={`${databaseKey}:table:${table.name}`}
-                        connection={connection}
-                        database={database}
-                        databaseKey={databaseKey}
-                        table={table}
-                        tableGroups={treeConfig.tableGroups}
-                      />
-                    ))}
+              {/* Tables group (virtualized) */}
+              <div className="object-group">
+                <button
+                  type="button"
+                  className="tree-row tree-section"
+                  aria-expanded={tableGroupExpanded}
+                  onClick={() => toggleGroup(tableGroupKey)}
+                  onContextMenu={openTableGroupContextMenu}
+                >
+                  {tableGroupExpanded ? <CaretDown /> : <CaretRight />}
+                  {getTableIcon()}<span className="tree-label">{treeConfig.itemLabel}</span><span>{tables.length}</span>
+                </button>
+                {tableGroupExpanded && (
+                  <div ref={tablesParentRef} style={{ overflow: 'auto', maxHeight: '400px' }}>
+                    <div style={{ height: `${tableVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+                      {tableVirtualizer.getVirtualItems().map((virtualRow) => {
+                        const table = tables[virtualRow.index]
+                        return (
+                          <div
+                            key={table.name}
+                            data-index={virtualRow.index}
+                            ref={tableVirtualizer.measureElement}
+                            style={{
+                              position: 'absolute',
+                              top: 0,
+                              transform: `translateY(${virtualRow.start}px)`,
+                              width: '100%',
+                            }}
+                          >
+                            <TableNode
+                              connection={connection}
+                              database={database}
+                              databaseKey={databaseKey}
+                              table={table}
+                              tableGroups={treeConfig.tableGroups}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
-                )
-              })()}
+                )}
+              </div>
 
               {/* Object groups (views, procedures, functions, etc.) */}
               {treeConfig.groups.map((group) => {
@@ -220,4 +251,6 @@ export default function DatabaseNode({ connection, database, databaseKey, treeCo
       )}
     </div>
   )
-}
+})
+
+export default DatabaseNode

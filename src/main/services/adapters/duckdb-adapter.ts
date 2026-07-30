@@ -109,13 +109,15 @@ const filterDuckDb = (filter: TableDataFilter): string => {
 // ── DuckDB handle cache ──────────────────────────────────────────────
 
 const duckDbHandles = new Map<string, DuckDbDatabase>()
+const duckDbLastAccess = new Map<string, number>()
 
 const ensureDuckDbHandle = async (connection: AdapterConnection): Promise<DuckDbDatabase> => {
   const filePath = connection.host
   const existing = duckDbHandles.get(filePath)
-  if (existing) return existing
+  if (existing) { duckDbLastAccess.set(filePath, Date.now()); return existing }
   const db = new duckdb.Database(filePath)
   duckDbHandles.set(filePath, db)
+  duckDbLastAccess.set(filePath, Date.now())
   return db
 }
 
@@ -125,7 +127,20 @@ export const closeDuckDbHandle = async (connection: AdapterConnection): Promise<
   const db = duckDbHandles.get(filePath)
   if (db) {
     duckDbHandles.delete(filePath)
+    duckDbLastAccess.delete(filePath)
     await dbClose(db)
+  }
+}
+
+/** 驱逐空闲超过 maxIdleMs 的 DuckDB 句柄 */
+export const evictIdleDuckDbHandles = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  for (const [key, db] of duckDbHandles) {
+    if (now - (duckDbLastAccess.get(key) ?? 0) > maxIdleMs) {
+      duckDbHandles.delete(key)
+      duckDbLastAccess.delete(key)
+      await dbClose(db).catch(() => {})
+    }
   }
 }
 
@@ -247,6 +262,7 @@ export const executeDuckDbQuery = async (connection: AdapterConnection, sql: str
       let cursorId: string | undefined
       if (truncated) {
         const cursor = createCursor({
+          connectionId: connection.id,
           engine: 'DuckDB',
           connectionKey: connection.host,
           databaseName: '',

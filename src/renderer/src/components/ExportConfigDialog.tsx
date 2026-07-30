@@ -10,7 +10,7 @@ interface ExportConfigDialogProps {
 export default function ExportConfigDialog({ onClose }: ExportConfigDialogProps) {
   const connections = useConnectionStore((s) => s.connections)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set(connections.map((c) => c.id)))
-  const [includePasswords, setIncludePasswords] = useState(true)
+  const [includePasswords, setIncludePasswords] = useState(false)
   const [exporting, setExporting] = useState(false)
   const { showToast } = useToast()
 
@@ -105,7 +105,7 @@ export default function ExportConfigDialog({ onClose }: ExportConfigDialogProps)
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-subtle, #f8fafc)', padding: '10px 16px', borderRadius: 8, border: '1px solid var(--border-color, #e2e8f0)' }}>
             <div>
               <strong style={{ fontSize: 13, display: 'block', color: 'var(--text-color)' }}>安全设置</strong>
-              <span style={{ fontSize: 12, color: 'var(--text-muted, #64748b)' }}>导出时是否附带已保存的密码（不勾选将以安全空密码导出）</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted, #64748b)' }}>默认不导出密码；勾选后数据库密码和 SSH 凭据将以明文写入 JSON</span>
             </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
               <input
@@ -113,7 +113,7 @@ export default function ExportConfigDialog({ onClose }: ExportConfigDialogProps)
                 checked={includePasswords}
                 onChange={(e) => setIncludePasswords(e.target.checked)}
               />
-              包含已保存的密码
+              明文包含已保存的密码
             </label>
           </div>
 

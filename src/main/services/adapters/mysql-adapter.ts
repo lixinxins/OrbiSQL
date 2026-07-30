@@ -16,6 +16,7 @@ import { dbWorkerMysqlQuery, type DbWorkerFieldDetail } from '../db-query-runtim
 // ── MySQL connection pool cache ───────────────────────────────────────
 
 const mysqlPools = new Map<string, Pool>()
+const mysqlLastAccess = new Map<string, number>()
 
 const quoteId = (identifier: string): string => `\`${identifier.replaceAll('`', '``')}\``
 
@@ -48,6 +49,7 @@ export const getMysqlPool = (connection: StoredConnection, database?: string, mu
     })
     mysqlPools.set(key, pool)
   }
+  mysqlLastAccess.set(key, Date.now())
   return pool
 }
 
@@ -61,6 +63,22 @@ export const destroyMysqlPools = async (connectionId: number): Promise<void> => 
       toDestroy.push(pool.end().catch(() => undefined))
     }
   }
+  await Promise.all(toDestroy)
+}
+
+/** 驱逐空闲超过 maxIdleMs 的连接池 */
+export const evictIdleMysqlPools = async (maxIdleMs: number): Promise<void> => {
+  const now = Date.now()
+  const toDestroy: Promise<void>[] = []
+  for (const [key, pool] of mysqlPools) {
+    const lastAccess = mysqlLastAccess.get(key) ?? 0
+    if (now - lastAccess > maxIdleMs) {
+      mysqlPools.delete(key)
+      mysqlLastAccess.delete(key)
+      toDestroy.push(pool.end().catch(() => undefined))
+    }
+  }
+  if (toDestroy.length) console.log(`[MySQL] Evicted ${toDestroy.length} idle pool(s)`)
   await Promise.all(toDestroy)
 }
 
@@ -124,14 +142,16 @@ export { quoteId as quoteMysqlIdentifier }
 
 /** Worker 版本的 MySQL 可编辑元数据提取 */
 export const getMysqlEditableMetadata = async (
-  workerConfig: { host: string; port: number; username: string; password: string; sslEnabled: boolean; sslRejectUnauthorized: boolean; sslCaPath: string; sslCertPath: string; sslKeyPath: string },
+  workerConfig: { id?: number; host: string; port: number; username: string; password: string; sslEnabled: boolean; sslRejectUnauthorized: boolean; sslCaPath: string; sslCertPath: string; sslKeyPath: string },
   databaseName: string,
   fields: DbWorkerFieldDetail[]
 ): Promise<QueryExecutionResult['editable']> => {
   const sourceTables = Array.from(new Set(fields.map((f) => f.orgTable ?? f.table ?? '').filter(Boolean)))
   if (sourceTables.length !== 1) return undefined
   const tableName = sourceTables[0]
-  const poolKey = `${workerConfig.host}:${workerConfig.port}:${workerConfig.username}`
+  const poolKey = workerConfig.id != null && workerConfig.id > 0
+    ? `id:${workerConfig.id}`
+    : `${workerConfig.host}:${workerConfig.port}:${workerConfig.username}`
   const metaResult = await dbWorkerMysqlQuery(poolKey, workerConfig, databaseName,
     'SELECT COLUMN_NAME AS columnName, COLUMN_KEY AS columnKey FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
     [databaseName, tableName])

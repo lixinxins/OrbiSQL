@@ -1,4 +1,6 @@
+import React, { useRef } from 'react'
 import { CaretDown, CaretRight, FolderOpen } from '@phosphor-icons/react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { DatabaseConnection, DatabaseItem, SchemaItem } from '@/shared/connections'
 import { useSidebarStore } from '../stores/useSidebarStore'
 import type { EngineTreeConfig, ObjectGroupKey } from '../stores/useSidebarStore'
@@ -13,12 +15,24 @@ interface SchemaNodeProps {
   treeConfig: EngineTreeConfig
 }
 
-export default function SchemaNode({ connection, database, databaseKey, schema, treeConfig }: SchemaNodeProps) {
+const SchemaNode = React.memo(function SchemaNode({ connection, database, databaseKey, schema, treeConfig }: SchemaNodeProps) {
   const expandedGroups = useSidebarStore((s) => s.expandedGroups)
   const sidebarActions = useSidebarStore((s) => s.actions)
 
   const schemaKey = `${databaseKey}:schema:${schema.name}`
   const schemaExpanded = expandedGroups.has(schemaKey)
+  const isSchemaSelected = useSidebarStore((s) => s.selectedTable === schemaKey)
+
+  // ── Virtualized table list ─────────────────────────────
+  const tables = schema.tables
+  const tablesParentRef = useRef<HTMLDivElement>(null)
+  const tableVirtualizer = useVirtualizer({
+    count: tables.length,
+    getScrollElement: () => tablesParentRef.current,
+    getItemKey: (index) => tables[index]?.name ?? index,
+    estimateSize: () => 32,
+    overscan: 10,
+  })
 
   const toggleSchema = (): void => {
     sidebarActions.setExpandedGroups((current) => {
@@ -45,7 +59,8 @@ export default function SchemaNode({ connection, database, databaseKey, schema, 
       y: Math.min(event.clientY, window.innerHeight - 170),
       connection,
       database,
-      databaseKey
+      databaseKey,
+      schemaName: schema.name
     })
   }
 
@@ -60,7 +75,8 @@ export default function SchemaNode({ connection, database, databaseKey, schema, 
       database,
       databaseKey,
       groupKey,
-      groupLabel
+      groupLabel,
+      schemaName: schema.name
     })
   }
 
@@ -76,17 +92,35 @@ export default function SchemaNode({ connection, database, databaseKey, schema, 
       databaseKey,
       groupKey,
       groupLabel,
-      objectName
+      objectName,
+      schemaName: schema.name
     })
   }
+
+  const tableGroupKey = `${schemaKey}:tables`
+  const tableGroupExpanded = expandedGroups.has(tableGroupKey)
 
   return (
     <div className="schema-node">
       <button
         type="button"
-        className="tree-row tree-schema"
+        className={`tree-row tree-schema${isSchemaSelected ? ' selected' : ''}`}
         aria-expanded={schemaExpanded}
-        onClick={toggleSchema}
+        onClick={() => { sidebarActions.setSelectedTable(schemaKey); toggleSchema() }}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          sidebarActions.setSelectedTable(schemaKey)
+          sidebarActions.setContextMenu({
+            kind: 'schema',
+            x: Math.min(e.clientX, window.innerWidth - 196),
+            y: Math.min(e.clientY, window.innerHeight - 170),
+            connection,
+            database,
+            databaseKey,
+            schema
+          })
+        }}
       >
         {schemaExpanded ? <CaretDown /> : <CaretRight />}
         <FolderOpen weight="fill" className="schema-icon" />
@@ -96,38 +130,52 @@ export default function SchemaNode({ connection, database, databaseKey, schema, 
 
       {schemaExpanded && (
         <div className="schema-objects">
-          {/* Tables group */}
-          {(() => {
-            const groupKey = `${schemaKey}:tables`
-            const groupExpanded = expandedGroups.has(groupKey)
-            return (
-              <div className="object-group">
-                <button
-                  type="button"
-                  className="tree-row tree-section"
-                  aria-expanded={groupExpanded}
-                  onClick={() => toggleGroup(groupKey)}
-                  onContextMenu={openTableGroupContextMenu}
-                >
-                  {groupExpanded ? <CaretDown /> : <CaretRight />}
-                  {getTableIcon()}
-                  <span className="tree-label">{treeConfig.itemLabel}</span>
-                  <span>{schema.tables.length}</span>
-                </button>
-                {groupExpanded &&
-                  schema.tables.map((table) => (
-                    <TableNode
-                      key={`${schemaKey}:table:${table.name}`}
-                      connection={connection}
-                      database={database}
-                      databaseKey={databaseKey}
-                      table={table}
-                      tableGroups={treeConfig.tableGroups}
-                    />
-                  ))}
+          {/* Tables group (virtualized) */}
+          <div className="object-group">
+            <button
+              type="button"
+              className="tree-row tree-section"
+              aria-expanded={tableGroupExpanded}
+              onClick={() => toggleGroup(tableGroupKey)}
+              onContextMenu={openTableGroupContextMenu}
+            >
+              {tableGroupExpanded ? <CaretDown /> : <CaretRight />}
+              {getTableIcon()}
+              <span className="tree-label">{treeConfig.itemLabel}</span>
+              <span>{tables.length}</span>
+            </button>
+            {tableGroupExpanded && (
+              <div ref={tablesParentRef} style={{ overflow: 'auto', maxHeight: '400px' }}>
+                <div style={{ height: `${tableVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+                  {tableVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const table = tables[virtualRow.index]
+                    return (
+                      <div
+                        key={table.name}
+                        data-index={virtualRow.index}
+                        ref={tableVirtualizer.measureElement}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          transform: `translateY(${virtualRow.start}px)`,
+                          width: '100%',
+                        }}
+                      >
+                        <TableNode
+                          connection={connection}
+                          database={database}
+                          databaseKey={databaseKey}
+                          table={table}
+                          tableGroups={treeConfig.tableGroups}
+                          schemaName={schema.name}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
-            )
-          })()}
+            )}
+          </div>
 
           {/* Object groups (views, materializedViews, functions, procedures, sequences) */}
           {treeConfig.groups.map((group) => {
@@ -168,4 +216,6 @@ export default function SchemaNode({ connection, database, databaseKey, schema, 
       )}
     </div>
   )
-}
+})
+
+export default SchemaNode

@@ -136,7 +136,8 @@ export function useTableOperations() {
     connection: DatabaseConnection,
     database: DatabaseItem,
     table: TableItem,
-    sqlKind: 'select' | 'insert' | 'update' | 'delete' | 'ddl'
+    sqlKind: 'select' | 'insert' | 'update' | 'delete' | 'ddl',
+    schemaName?: string
   ): void => {
     const isDoubleQuoteEngine =
       connection.engine === 'PostgreSQL' ||
@@ -153,6 +154,9 @@ export function useTableOperations() {
       return `\`${identifier}\``
     }
 
+    const schemaPrefix = schemaName ? `${q(schemaName)}.` : ''
+    const qualifiedTable = `${schemaPrefix}${q(table.name)}`
+
     const columns = table.columns ?? []
     const firstColName = columns[0]?.name || 'id'
     let initialSql = ''
@@ -160,11 +164,11 @@ export function useTableOperations() {
 
     if (sqlKind === 'select') {
       if (connection.engine === 'SQL Server') {
-        initialSql = `SELECT TOP 100 *\nFROM ${q(table.name)};`
+        initialSql = `SELECT TOP 100 *\nFROM ${qualifiedTable};`
       } else if (connection.engine === 'Oracle') {
-        initialSql = `SELECT *\nFROM ${q(table.name)}\nWHERE ROWNUM <= 100;`
+        initialSql = `SELECT *\nFROM ${qualifiedTable}\nWHERE ROWNUM <= 100;`
       } else {
-        initialSql = `SELECT *\nFROM ${q(table.name)}\nLIMIT 100;`
+        initialSql = `SELECT *\nFROM ${qualifiedTable}\nLIMIT 100;`
       }
       title = `SELECT · ${table.name}`
     } else if (sqlKind === 'insert') {
@@ -172,16 +176,16 @@ export function useTableOperations() {
         ? columns.map((col) => q(col.name)).join(', ')
         : 'column1, column2'
       const valList = columns.length ? columns.map(() => `'...'`).join(', ') : "'val1', 'val2'"
-      initialSql = `INSERT INTO ${q(table.name)} (${colList})\nVALUES (${valList});`
+      initialSql = `INSERT INTO ${qualifiedTable} (${colList})\nVALUES (${valList});`
       title = `INSERT · ${table.name}`
     } else if (sqlKind === 'update') {
       const setList = columns.length
         ? columns.map((col) => `${q(col.name)} = '...'`).join(',\n  ')
         : `${q('column')} = 'val'`
-      initialSql = `UPDATE ${q(table.name)}\nSET ${setList}\nWHERE ${q(firstColName)} = '...';`
+      initialSql = `UPDATE ${qualifiedTable}\nSET ${setList}\nWHERE ${q(firstColName)} = '...';`
       title = `UPDATE · ${table.name}`
     } else if (sqlKind === 'delete') {
-      initialSql = `DELETE FROM ${q(table.name)}\nWHERE ${q(firstColName)} = '...';`
+      initialSql = `DELETE FROM ${qualifiedTable}\nWHERE ${q(firstColName)} = '...';`
       title = `DELETE · ${table.name}`
     } else if (sqlKind === 'ddl') {
       if (isDoubleQuoteEngine) {
@@ -206,13 +210,16 @@ export function useTableOperations() {
     connection: DatabaseConnection,
     database: DatabaseItem,
     table: TableItem,
-    action: 'check' | 'optimize' | 'analyze'
+    action: 'check' | 'optimize' | 'analyze',
+    schemaName?: string
   ): void => {
     const isPgOrOracle = connection.engine === 'PostgreSQL' || connection.engine === 'Oracle'
     const q = (identifier: string) => (isPgOrOracle ? `"${identifier}"` : `\`${identifier}\``)
     const keywordMap = { check: 'CHECK TABLE', optimize: 'OPTIMIZE TABLE', analyze: 'ANALYZE TABLE' }
     const actionLabel = { check: '检查表', optimize: '优化表', analyze: '分析表' }
-    const initialSql = `${keywordMap[action]} ${q(table.name)};`
+    const schemaPrefix = schemaName ? `${q(schemaName)}.` : ''
+    const qualifiedTable = `${schemaPrefix}${q(table.name)}`
+    const initialSql = `${keywordMap[action]} ${qualifiedTable};`
 
     addQueryTab({
       connectionId: connection.id,

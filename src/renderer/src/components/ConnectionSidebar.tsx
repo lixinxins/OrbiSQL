@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
 import { useGlobalCloseMenu } from '../hooks/useGlobalCloseMenu'
 import {
@@ -25,14 +25,14 @@ const relationalTableGroups = [
   { key: 'columns' as const, label: '字段' },
   { key: 'indexes' as const, label: '索引' },
   { key: 'foreignKeys' as const, label: '外键' },
-  { key: 'checks' as const, label: '检查' },
+  { key: 'checks' as const, label: '检查约束' },
   { key: 'triggers' as const, label: '触发器' }
 ]
 
 const engineTreeConfigs: Record<string, EngineTreeConfig> = {
   MySQL: { itemLabel: '数据表', groups: [{ key: 'views', label: '视图' }, { key: 'procedures', label: '存储过程' }], tableGroups: relationalTableGroups },
   MariaDB: { itemLabel: '数据表', groups: [{ key: 'views', label: '视图' }, { key: 'procedures', label: '存储过程' }, { key: 'functions', label: '函数' }, { key: 'events', label: '事件' }], tableGroups: relationalTableGroups },
-  PostgreSQL: { itemLabel: '数据表', groups: [{ key: 'views', label: '视图' }, { key: 'materializedViews', label: '物化视图' }, { key: 'foreignTables', label: '外部表' }, { key: 'procedures', label: '存储过程' }, { key: 'functions', label: '函数' }, { key: 'sequences', label: '序列' }, { key: 'types', label: '自定义类型' }, { key: 'domains', label: '域' }, { key: 'extensions', label: '扩展插件' }], tableGroups: [...relationalTableGroups, { key: 'policies' as const, label: '安全策略 (RLS)' }] },
+  PostgreSQL: { itemLabel: '数据表', groups: [{ key: 'views', label: '视图' }, { key: 'materializedViews', label: '物化视图' }, { key: 'foreignTables', label: '外部表' }, { key: 'procedures', label: '存储过程' }, { key: 'functions', label: '函数' }, { key: 'sequences', label: '序列' }, { key: 'types', label: '自定义类型' }, { key: 'domains', label: '域' }, { key: 'extensions', label: '扩展' }], tableGroups: [...relationalTableGroups, { key: 'policies' as const, label: '行级安全策略（RLS）' }] },
   SQLite: { itemLabel: '数据表', groups: [{ key: 'views', label: '视图' }, { key: 'indexes', label: '索引' }, { key: 'triggers', label: '触发器' }], tableGroups: relationalTableGroups.filter((g) => g.key !== 'foreignKeys') },
   'SQL Server': { itemLabel: '数据表', groups: [{ key: 'views', label: '视图' }, { key: 'procedures', label: '存储过程' }, { key: 'functions', label: '函数' }, { key: 'synonyms', label: '同义词' }], tableGroups: relationalTableGroups },
   Oracle: { itemLabel: '数据表', groups: [{ key: 'views', label: '视图' }, { key: 'materializedViews', label: '物化视图' }, { key: 'sequences', label: '序列' }, { key: 'procedures', label: '存储过程' }, { key: 'functions', label: '函数' }, { key: 'packages', label: '包' }], tableGroups: relationalTableGroups },
@@ -61,6 +61,7 @@ export default function ConnectionSidebar() {
   const openDatabaseOverview = useDatabaseTabsStore((s) => s.openDatabaseOverview)
 
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed)
+  const uiActions = useUIStore((s) => s.actions)
 
   // ── Sidebar store ────────────────────────────────────────
   const expandedConnections = useSidebarStore((s) => s.expandedConnections)
@@ -79,6 +80,7 @@ export default function ConnectionSidebar() {
   const [resizing, setResizing] = useState(false)
   const resizeStart = useRef({ pointerX: 0, width: 282 })
   const connectionClickTimer = useRef<number | null>(null)
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [selectedConnection, setSelectedConnection] = useState(0)
   const [connectionGroups, setConnectionGroups] = useState<ConnectionGroup[]>([])
@@ -149,6 +151,51 @@ export default function ConnectionSidebar() {
       next.has(groupId) ? next.delete(groupId) : next.add(groupId)
       return next
     })
+
+  const expandConnectionGroup = (groupId: number): void =>
+    setCollapsedConnectionGroups((current) => {
+      if (!current.has(groupId)) return current
+      const next = new Set(current)
+      next.delete(groupId)
+      return next
+    })
+
+  const collapseConnectionGroup = (groupId: number): void =>
+    setCollapsedConnectionGroups((current) =>
+      current.has(groupId) ? current : new Set(current).add(groupId)
+    )
+
+  const expandAllGroupsInCategory = (category: 'database' | 'ssh'): void => {
+    const groupIds = connectionGroups.filter((g) => g.category === category).map((g) => g.id)
+    setCollapsedSections((current) => {
+      if (!current.has(category)) return current
+      const next = new Set(current)
+      next.delete(category)
+      return next
+    })
+    setCollapsedConnectionGroups((prev) => {
+      const next = new Set(prev)
+      groupIds.forEach((id) => next.delete(id))
+      return next
+    })
+  }
+
+  const collapseAllGroupsInCategory = (category: 'database' | 'ssh'): void => {
+    const groupIds = connectionGroups.filter((g) => g.category === category).map((g) => g.id)
+    setCollapsedSections((current) =>
+      current.has(category) ? current : new Set(current).add(category)
+    )
+    setCollapsedConnectionGroups((prev) => {
+      const next = new Set(prev)
+      groupIds.forEach((id) => next.add(id))
+      return next
+    })
+  }
+
+  const refreshConnectionList = (): void => {
+    loadConnectionGroups()
+    void connActions.loadConnections()
+  }
 
   useEffect(
     () => () => {
@@ -225,6 +272,8 @@ export default function ConnectionSidebar() {
 
   // ── Click handling ───────────────────────────────────────
   const handleConnectionClick = (connection: DatabaseConnection): void => {
+    sidebarActions.setFocusedConnectionId(connection.id)
+    uiActions.setFocusedItem({ connectionName: connection.name, engine: connection.engine })
     if (connectionClickTimer.current !== null) window.clearTimeout(connectionClickTimer.current)
     connectionClickTimer.current = window.setTimeout(() => {
       if (connection.engine === 'SSH') openSshTerminal(connection)
@@ -248,12 +297,20 @@ export default function ConnectionSidebar() {
 
   // ── Derived ──────────────────────────────────────────────
   const normalizedSearch = search.trim().toLowerCase()
-  const visibleConnections = connections.filter((c) =>
-    [c.name, c.engine, ...c.databases.map((d) => d.name)]
-      .join(' ')
-      .toLowerCase()
-      .includes(normalizedSearch)
-  )
+  const visibleConnections = useMemo(() => {
+    if (!normalizedSearch) return connections
+    return connections.filter((c) => {
+      if (c.name.toLowerCase().includes(normalizedSearch)) return true
+      if (c.engine.toLowerCase().includes(normalizedSearch)) return true
+      if (c.host?.toLowerCase().includes(normalizedSearch)) return true
+      if (c.groupName?.toLowerCase().includes(normalizedSearch)) return true
+      return c.databases.some((db) =>
+        db.name?.toLowerCase().includes(normalizedSearch) ||
+        db.schemas?.some((s) => s.name?.toLowerCase().includes(normalizedSearch)) ||
+        db.tables?.some((t) => t.name?.toLowerCase().includes(normalizedSearch))
+      )
+    })
+  }, [connections, normalizedSearch])
   const dbConnections = visibleConnections.filter((c) => c.engine !== 'SSH')
   const sshConnections = visibleConnections.filter((c) => c.engine === 'SSH')
 
@@ -273,7 +330,7 @@ export default function ConnectionSidebar() {
       collapsed
     })
     if (!collapsed) {
-      connectionGroups.forEach((group) => {
+      connectionGroups.filter(g => g.category === 'database').forEach((group) => {
         const ch = dbConnections.filter((c) => c.groupId === group.id)
         if (ch.length) {
           connectionListRows.push({ kind: 'group', group, count: ch.length })
@@ -291,13 +348,13 @@ export default function ConnectionSidebar() {
     const collapsed = collapsedSections.has('ssh')
     connectionListRows.push({
       kind: 'section-header',
-      title: 'SSH 客户端',
+      title: 'SSH 连接',
       count: sshConnections.length,
       category: 'ssh',
       collapsed
     })
     if (!collapsed) {
-      connectionGroups.forEach((group) => {
+      connectionGroups.filter(g => g.category === 'ssh').forEach((group) => {
         const ch = sshConnections.filter((c) => c.groupId === group.id)
         if (ch.length) {
           connectionListRows.push({ kind: 'group', group, count: ch.length })
@@ -392,6 +449,16 @@ export default function ConnectionSidebar() {
       style={{ width: sidebarWidth, flexBasis: sidebarWidth }}
       aria-busy={connectionsLoading}
       aria-hidden={sidebarCollapsed}
+      onContextMenu={(e) => {
+        if (e.target === e.currentTarget || (e.target as HTMLElement).classList?.contains('connection-list')) {
+          e.preventDefault()
+          sidebarActions.setContextMenu({
+            kind: 'sidebarBlank',
+            x: e.clientX,
+            y: e.clientY
+          })
+        }
+      }}
     >
       {connectionsLoading && <span className="sidebar-loading-bar" aria-hidden="true" />}
       <label className="connection-search">
@@ -399,7 +466,13 @@ export default function ConnectionSidebar() {
         <input
           value={search}
           disabled={connectionsLoading && !connections.length}
-          onChange={(e) => sidebarActions.setSearch(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value
+            if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+            searchTimerRef.current = setTimeout(() => {
+              sidebarActions.setSearch(value)
+            }, 250)
+          }}
           placeholder="搜索连接或数据库"
         />
       </label>
@@ -432,6 +505,15 @@ export default function ConnectionSidebar() {
                   className={`connection-section-header ${row.category}${row.collapsed ? ' collapsed' : ''}`}
                   key={`section-${row.category}`}
                   onClick={() => toggleSection(row.category)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    sidebarActions.setContextMenu({
+                      kind: 'section',
+                      x: Math.min(e.clientX, window.innerWidth - 196),
+                      y: Math.min(e.clientY, window.innerHeight - 330),
+                      category: row.category
+                    })
+                  }}
                 >
                   <span className="section-caret">
                     {row.collapsed ? <CaretRight /> : <CaretDown />}
@@ -465,6 +547,15 @@ export default function ConnectionSidebar() {
                   className={`connection-folder-row${isDragOver ? ' drag-over' : ''}`}
                   key={`folder-${gid}`}
                   style={isDragOver ? { background: '#e0e7ff', outline: '2px dashed #6366f1', borderRadius: 4 } : undefined}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    sidebarActions.setContextMenu({
+                      kind: 'connectionGroup',
+                      x: Math.min(e.clientX, window.innerWidth - 196),
+                      y: Math.min(e.clientY, window.innerHeight - 330),
+                      group: row.group
+                    })
+                  }}
                   onDragOver={(e) => {
                     e.preventDefault()
                     setDragOverGroupId(gid)
@@ -636,6 +727,12 @@ export default function ConnectionSidebar() {
         onToggleConnectionFromMenu={toggleConnectionFromMenu}
         onDatabaseClick={handleDatabaseClick}
         onAssignGroup={assignGroup}
+        collapsedConnectionGroups={collapsedConnectionGroups}
+        onExpandConnectionGroup={expandConnectionGroup}
+        onCollapseConnectionGroup={collapseConnectionGroup}
+        onExpandAllGroups={expandAllGroupsInCategory}
+        onCollapseAllGroups={collapseAllGroupsInCategory}
+        onRefreshConnections={refreshConnectionList}
       />
     </aside>
   )

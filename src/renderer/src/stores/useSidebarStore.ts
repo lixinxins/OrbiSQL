@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { DatabaseConnection, DatabaseItem, SchemaItem, TableItem } from '@/shared/connections'
+import type { ConnectionGroup, DatabaseConnection, DatabaseItem, SchemaItem, TableItem } from '@/shared/connections'
 import { useConnectionStore } from './useConnectionStore'
 
 // ── Discriminated Union: Context Menu ──────────────────────
@@ -8,11 +8,12 @@ export type SidebarContextMenuState =
   | { kind: 'connection'; x: number; y: number; connection: DatabaseConnection }
   | { kind: 'database'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string }
   | { kind: 'schema'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; schema: SchemaItem }
-  | { kind: 'table'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; table: TableItem }
-  | { kind: 'tableGroup'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string }
-  | { kind: 'object'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; groupKey: string; groupLabel: string; objectName: string }
-  | { kind: 'objectGroup'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; groupKey: string; groupLabel: string }
-  | { kind: 'connectionGroup'; x: number; y: number; groupId: number; groupName: string }
+  | { kind: 'table'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; table: TableItem; schemaName?: string }
+  | { kind: 'tableGroup'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; schemaName?: string }
+  | { kind: 'object'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; groupKey: string; groupLabel: string; objectName: string; schemaName?: string }
+  | { kind: 'objectGroup'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; groupKey: string; groupLabel: string; schemaName?: string }
+  | { kind: 'column'; x: number; y: number; connection: DatabaseConnection; database: DatabaseItem; databaseKey: string; table: string; column: string; schemaName?: string }
+  | { kind: 'connectionGroup'; x: number; y: number; group: ConnectionGroup }
   | { kind: 'section'; x: number; y: number; category: 'database' | 'ssh' }
   | { kind: 'sidebarBlank'; x: number; y: number }
   | null
@@ -45,6 +46,8 @@ export interface SidebarState {
   togglingConnections: Set<number>
   search: string
   contextMenu: SidebarContextMenuState
+  /** 当前侧边栏聚焦的连接（点击任意侧边栏项时更新） */
+  focusedConnectionId: number | null
 
   // ── Actions ─────────────────────────────────────────────
   actions: {
@@ -59,6 +62,7 @@ export interface SidebarState {
     setTogglingConnections: (updater: Set<number> | ((prev: Set<number>) => Set<number>)) => void
     setSearch: (value: string | ((prev: string) => string)) => void
     setContextMenu: (value: SidebarContextMenuState | ((prev: SidebarContextMenuState) => SidebarContextMenuState)) => void
+    setFocusedConnectionId: (id: number | null) => void
 
     // ── Business handlers ───────────────────────────────────
     loadDatabaseDetail: (connection: DatabaseConnection, database: DatabaseItem) => Promise<{ connection: DatabaseConnection; database: DatabaseItem } | null>
@@ -77,6 +81,7 @@ export const useSidebarStore = create<SidebarState>((set) => ({
   togglingConnections: new Set(),
   search: '',
   contextMenu: null,
+  focusedConnectionId: null,
 
   actions: {
     setExpandedConnections: (updater) => {
@@ -145,13 +150,16 @@ export const useSidebarStore = create<SidebarState>((set) => ({
       }))
     },
 
+    setFocusedConnectionId: (id) => set({ focusedConnectionId: id }),
+
     loadDatabaseDetail: async (connection, database) => {
       try {
-        const loadedConnections = await useConnectionStore.getState().actions.loadConnections()
-        const loadedConnection = loadedConnections.find((item) => item.id === connection.id)
-        const loadedDatabase = loadedConnection?.databases.find((item) => item.name === database.name)
-        return loadedConnection && loadedDatabase
-          ? { connection: loadedConnection, database: loadedDatabase }
+        const detail = await useConnectionStore.getState().actions.loadDatabaseMetadata(connection.id, database.name)
+        if (!detail) return null
+        const updatedConn = useConnectionStore.getState().connections.find((c) => c.id === connection.id)
+        const updatedDb = updatedConn?.databases.find((db) => db.name === database.name)
+        return updatedConn && updatedDb
+          ? { connection: updatedConn, database: updatedDb }
           : null
       } catch {
         return null

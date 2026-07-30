@@ -5,7 +5,7 @@ import { WarningCircle, X } from '@phosphor-icons/react'
 export interface ConfirmDialogOptions {
   title: string
   message: string
-  detail: string
+  detail?: string
   confirmLabel?: string
 }
 
@@ -40,7 +40,7 @@ function ConfirmDialog({ request, onFinish }: { request: PendingConfirmation; on
         <div className="confirm-dialog-copy">
           <h2 id="confirm-dialog-title">{request.title}</h2>
           <p className="confirm-dialog-message">{request.message}</p>
-          <p id="confirm-dialog-description" className="confirm-dialog-detail">{request.detail}</p>
+          {request.detail && <p id="confirm-dialog-description" className="confirm-dialog-detail">{request.detail}</p>}
         </div>
         <footer className="confirm-dialog-actions">
           <button type="button" ref={cancelButtonRef} className="confirm-dialog-cancel" onClick={() => onFinish(false)}>取消</button>

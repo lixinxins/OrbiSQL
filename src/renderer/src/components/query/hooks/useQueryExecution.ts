@@ -30,7 +30,7 @@ export interface UseQueryExecutionReturn {
   loadingMore: boolean
   transactionActive: boolean
   transactionBusy: boolean
-  execute: () => Promise<void>
+  execute: (sqlOverride?: string) => Promise<void>
   executeExplain: () => Promise<void>
   handleLoadMore: () => Promise<void>
   beginTransaction: () => Promise<void>
@@ -103,7 +103,9 @@ export function useQueryExecution({
    * 执行当前 SQL
    * 支持单语句和多语句批量执行，执行后自动记录到历史。
    */
-  const execute = useCallback(async (): Promise<void> => {
+  const execute = useCallback(async (sqlOverride?: string): Promise<void> => {
+    const sqlToExecute = sqlOverride?.trim() || sql.trim()
+    if (!sqlToExecute || running) return
     if (!connectionId || !databaseName) {
       setResult({ success: false, message: '请先选择数据库' })
       setResultPanelVisible(true)
@@ -113,7 +115,7 @@ export function useQueryExecution({
     }
     setRunning(true)
     try {
-      const nextResult = await window.omnidb.queries.execute(connectionId, databaseName, sql, transactionActive ? sessionId : undefined)
+      const nextResult = await window.omnidb.queries.execute(connectionId, databaseName, sqlToExecute, transactionActive ? sessionId : undefined)
       setResult(nextResult)
       setResultPanelVisible(true)
       setResultPanelTab(nextResult.success && nextResult.columns && nextResult.rows ? 'result' : 'message')
@@ -121,13 +123,13 @@ export function useQueryExecution({
       setResultPanelCollapsed(false)
       // Save to history
       setSqlHistory((prev) => {
-        const entry = { sql: sql.trim(), ts: Date.now(), success: nextResult.success }
-        return [entry, ...prev.filter((h) => h.sql !== sql.trim())].slice(0, 50)
+        const entry = { sql: sqlToExecute, ts: Date.now(), success: nextResult.success, queryCount: nextResult.queryCount ?? 1 }
+        return [entry, ...prev.filter((h) => h.sql !== sqlToExecute)].slice(0, 50)
       })
     } finally {
       setRunning(false)
     }
-  }, [connectionId, databaseName, sql, transactionActive, sessionId, setResultPanelVisible, setResultPanelTab, setResultDataTab, setResultPanelCollapsed, setSqlHistory])
+  }, [connectionId, databaseName, sql, running, transactionActive, sessionId, setResultPanelVisible, setResultPanelTab, setResultDataTab, setResultPanelCollapsed, setSqlHistory])
 
   /**
    * 开启事务

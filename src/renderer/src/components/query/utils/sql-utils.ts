@@ -4,6 +4,64 @@
  */
 import type { DatabaseItem } from '@/shared/connections'
 
+/** 返回光标所在的单条 SQL；分号出现在字符串、注释或 PostgreSQL dollar quote 中时不会误分割。 */
+export const getSqlStatementAtPosition = (sql: string, cursorPosition: number): string => {
+  const ranges: Array<{ from: number; to: number }> = []
+  let start = 0
+  let index = 0
+  let quote = ''
+  let dollarTag = ''
+  let lineComment = false
+  let blockComment = false
+
+  while (index < sql.length) {
+    const current = sql[index]
+    const next = sql[index + 1]
+    if (lineComment) {
+      if (current === '\n') lineComment = false
+      index += 1
+      continue
+    }
+    if (blockComment) {
+      if (current === '*' && next === '/') { blockComment = false; index += 2 } else index += 1
+      continue
+    }
+    if (dollarTag) {
+      if (sql.startsWith(dollarTag, index)) { index += dollarTag.length; dollarTag = '' } else index += 1
+      continue
+    }
+    if (quote) {
+      if (current === '\\') { index += 2; continue }
+      if (current === quote) {
+        if (sql[index + 1] === quote && quote !== '`') index += 2
+        else { quote = ''; index += 1 }
+      } else index += 1
+      continue
+    }
+    if (current === '-' && next === '-') { lineComment = true; index += 2; continue }
+    if (current === '#') { lineComment = true; index += 1; continue }
+    if (current === '/' && next === '*') { blockComment = true; index += 2; continue }
+    if (current === "'" || current === '"' || current === '`') { quote = current; index += 1; continue }
+    if (current === '$') {
+      const match = sql.slice(index).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)
+      if (match) { dollarTag = match[0]; index += dollarTag.length; continue }
+    }
+    if (current === ';') {
+      if (sql.slice(start, index).trim()) ranges.push({ from: start, to: index + 1 })
+      start = index + 1
+    }
+    index += 1
+  }
+  if (sql.slice(start).trim()) ranges.push({ from: start, to: sql.length })
+  if (!ranges.length) return ''
+
+  const boundedCursor = Math.max(0, Math.min(cursorPosition, sql.length))
+  const currentRange = ranges.find((range) => boundedCursor >= range.from && boundedCursor <= range.to)
+    ?? ranges.find((range) => range.from >= boundedCursor)
+    ?? ranges[ranges.length - 1]
+  return sql.slice(currentRange.from, currentRange.to).trim()
+}
+
 /** 常用 SQL 关键字列表（含多词关键字如 LEFT JOIN、GROUP BY 等） */
 export const SQL_KEYWORDS = [
   'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE',

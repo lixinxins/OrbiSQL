@@ -132,6 +132,7 @@ function createHarmonyApi(): Window['omnidb'] {
       getOne: (id: number) => invokeDevice<DatabaseConnection | null>('connections:get-one', [id]),
       listGroups: () => invokeDevice<ConnectionGroup[]>('connections:list-groups'),
       createGroup: (name: string, category?: 'database' | 'ssh') => action('connections:create-group', [name, category]),
+      renameGroup: (id: number, name: string) => action('connections:rename-group', [id, name]),
       deleteGroup: (id: number) => action('connections:delete-group', [id]),
       setGroup: (connectionId: number, groupId: number | null) => action('connections:set-group', [connectionId, groupId]),
       selectSqliteFile: selectNativeSqliteFile,
@@ -215,6 +216,45 @@ function createHarmonyApi(): Window['omnidb'] {
         invokeDevice<TableDefinitionResult>('tables:get-definition', [connectionId, databaseName, tableName]),
       update: (input: UpdateTableInput) => action('tables:update', [input]),
       rename: (input: RenameTableInput) => action('tables:rename', [input])
+    },
+    memory: {
+      getStats: async () => ({
+        rssMB: 0,
+        heapTotalMB: 0,
+        heapUsedMB: 0,
+        externalMB: 0,
+        arrayBuffersMB: 0,
+        timestamp: Date.now()
+      }),
+      takeHeapSnapshot: async () => '',
+      forceGc: async () => ({ success: false, message: 'HarmonyOS 暂不支持手动 GC' })
+    },
+    workspace: {
+      getStats: async (range = '7d') => ({
+        activeConnections: 0,
+        savedDatabaseConnections: 0,
+        todayQueryCount: 0,
+        todaySuccessfulQueryCount: 0,
+        databaseCount: 0,
+        tableCount: 0,
+        dataObjectCount: 0,
+        dataBytes: null,
+        healthScore: 0,
+        healthStatus: '暂无运行数据',
+        healthSummary: '后台统计尚未同步。',
+        averageLatencyMs: null,
+        failedQueryRate: 0,
+        trend: {
+          range,
+          label: range === '30d' ? '最近 30 天' : range === '90d' ? '最近 90 天' : '最近 7 天',
+          subtitle: '暂无查询记录',
+          points: [],
+          labels: []
+        },
+        recentQueries: [],
+        connectionSummaries: [],
+        updatedAt: new Date().toISOString()
+      })
     },
     ssh: {
       connect: (options) => invokeDevice<{ success: boolean; message: string }>('ssh:connect', [options]),
