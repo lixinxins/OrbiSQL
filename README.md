@@ -21,7 +21,7 @@ QuillDB 基于 Electron、React 与 TypeScript 构建，面向 macOS、Windows �
 
 目前内置 14 种数据库引擎连接能力，覆盖 MySQL、MariaDB、PostgreSQL、SQLite、SQL Server、Oracle、TiDB、ClickHouse、MongoDB、Redis、DuckDB、Elasticsearch、达梦和人大金仓；仓库同时包含实验性的 HarmonyOS 客户端。
 
-> 当前版本为 `0.1.0`，仍处于早期开发阶段。欢迎提交 Issue、功能建议和 Pull Request。
+> 当前稳定版本为 `1.0.1`。欢迎提交 Issue、功能建议和 Pull Request。
 
 ## 界面预览
 

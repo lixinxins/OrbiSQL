@@ -299,7 +299,7 @@ export class ConnectionService {
 
       const exportData = {
         app: 'OrbiSQL',
-        version: '1.0.0',
+        version: '1.0.1',
         exportedAt: new Date().toISOString(),
         groups: groups.map((g) => ({ name: g.name, category: g.category })),
         connections: connections.map((c) => ({

@@ -133,7 +133,7 @@ export default function StatusBar() {
         <span>设置</span>
       </button>
 
-      <span className="global-status-bar__item version-tag">QuillDB v0.1.0</span>
+      <span className="global-status-bar__item version-tag">QuillDB v1.0.1</span>
     </footer>
   )
 }

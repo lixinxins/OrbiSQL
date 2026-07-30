@@ -8,7 +8,7 @@ interface AboutDialogProps {
 }
 
 function AboutDialog({ onClose }: AboutDialogProps) {
-  const [version, setVersion] = useState('0.1.0')
+  const [version, setVersion] = useState('1.0.1')
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {

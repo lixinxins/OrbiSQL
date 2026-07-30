@@ -111,7 +111,7 @@ function createHarmonyApi(): Window['omnidb'] {
   return {
     getAppInfo: async () => ({
       name: 'QuillDB',
-      version: window.orbisqlHarmony?.getAppVersion() || '0.1.0',
+      version: window.orbisqlHarmony?.getAppVersion() || '1.0.1',
       platform: 'harmonyos'
     }),
     onSettingsRequested: () => () => undefined,

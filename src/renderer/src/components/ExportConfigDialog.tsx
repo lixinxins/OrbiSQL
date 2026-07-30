@@ -39,7 +39,7 @@ export default function ExportConfigDialog({ onClose }: ExportConfigDialogProps)
   const previewJson = useMemo(() => {
     const data = {
       app: 'QuillDB',
-      version: '1.0.0',
+      version: '1.0.1',
       exportedAt: new Date().toISOString(),
       connectionsCount: selectedConnections.length,
       connections: selectedConnections.map((c) => ({
