@@ -1,6 +1,6 @@
 {
   "name": "quilldb",
-  "version": "1.0.1",
+  "version": "1.1.1",
   "description": "QuillDB - Cross-platform desktop database management tool",
   "desktopName": "QuillDB",
   "main": "./out/main/index.js",

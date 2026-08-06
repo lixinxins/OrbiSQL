@@ -23,7 +23,7 @@ QuillDB is built with Electron, React, and TypeScript for macOS, Windows, and Li
 
 It currently supports 12 database engines out of the box: MySQL, MariaDB, PostgreSQL, SQLite, SQL Server, TiDB, ClickHouse, MongoDB, Redis, DuckDB, DM (达梦), and KingbaseES (人大金仓). Oracle and Elasticsearch connection options remain in the UI as planned capabilities; their adapters are not implemented yet. The repository also keeps the HarmonyOS ArkWeb build configuration, while the client project itself is not distributed with the repository.
 
-> The current stable release is `1.0.1`. Issues, feature suggestions, and pull requests are welcome.
+> The current stable release is `1.1.1`. Issues, feature suggestions, and pull requests are welcome.
 
 ## UI Preview
 
@@ -193,7 +193,7 @@ QuillDB 基于 Electron、React 与 TypeScript 构建，面向 macOS、Windows �
 
 目前内置 12 种数据库引擎连接能力，覆盖 MySQL、MariaDB、PostgreSQL、SQLite、SQL Server、TiDB、ClickHouse、MongoDB、Redis、DuckDB、达梦和人大金仓；Oracle 与 Elasticsearch 的连接选项已保留在界面中，适配器尚未实现，属规划中能力。仓库保留 HarmonyOS ArkWeb 构建配置，客户端工程暂未随仓库分发。
 
-> 当前稳定版本为 `1.0.1`。欢迎提交 Issue、功能建议和 Pull Request。
+> 当前稳定版本为 `1.1.1`。欢迎提交 Issue、功能建议和 Pull Request。
 
 ## 界面预览
 
