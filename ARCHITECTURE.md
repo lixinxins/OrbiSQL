@@ -2,7 +2,7 @@
 
 ## 一、项目概述
 
-QuillDB 是一款跨平台桌面数据库工作台，基于 **Electron + React + TypeScript** 构建，同时包含实验性的鸿蒙 (HarmonyOS) 客户端。系统内置 14 种数据库引擎连接能力，并提供分层对象浏览、SQL 编辑与执行、执行计划、可编辑结果集、表结构设计、SSH/SFTP、AI 数据库助手以及数据导入导出等能力。
+QuillDB 是一款跨平台桌面数据库工作台，基于 **Electron + React + TypeScript** 构建，内置 12 种数据库引擎连接能力（Oracle、Elasticsearch 为规划中能力，尚未实现适配器），并提供分层对象浏览、SQL 编辑与执行、执行计划、可编辑结果集、表结构设计、SSH/SFTP、AI 数据库助手以及数据导入导出等能力。仓库保留 HarmonyOS ArkWeb 构建配置（`vite.harmony.config.ts`），客户端工程暂未随仓库分发。
 
 ---
 
@@ -138,7 +138,7 @@ src/main/index.ts
   ├─ 初始化 SQLite 持久化存储 (omnidb.sqlite)
   ├─ 创建应用菜单 (中英文双语)
   ├─ 创建 BrowserWindow (1440×900)
-  ├─ 注册 50+ IPC handlers
+  ├─ 注册 80+ IPC handlers（静态 channel + SSH 动态 channel）
   └─ 监听 app 生命周期，退出时清理资源
 ```
 
@@ -163,14 +163,19 @@ src/main/index.ts
 ConnectionService (路由层)
     │
     ├── engine === 'mysql' | 'mariadb' | 'tidb'
-    │       └── MySQLAdapter → mysql2 Pool
+    │       └── MySQLAdapter → mysql2 Pool（Worker 线程）
     │
-    ├── engine === 'postgresql' | 'duckdb'
-    │       └── PostgreSQLAdapter → pg Pool + pg-cursor
+    ├── engine === 'postgresql' | '人大金仓' | '达梦'
+    │       └── PostgreSQL 系 Adapter → pg Pool + pg-cursor
     │
-    └── engine === 'sqlite'
-            └── SQLiteAdapter → Node.js DatabaseSync
+    ├── engine === 'sqlite' | 'duckdb'
+    │       └── SQLite/DuckDB Adapter → DatabaseSync / duckdb
+    │
+    └── engine === 'sql server' | 'mongodb' | 'clickhouse' | 'redis'
+            └── 各独立 Adapter → mssql / mongodb / @clickhouse/client / ioredis
 ```
+
+当前 `adapters/` 下共 10 个适配器文件；Oracle、Elasticsearch 仅保留连接界面选项，无适配器实现（规划中）。
 
 每个适配器统一实现以下接口约定：
 - **连接池管理**：按 `connectionId:database` 缓存连接池
@@ -305,11 +310,12 @@ QueryWorkspace.tsx
 ├── useQueryExecution()      # 查询执行（快捷键 F5 / Ctrl+Enter）
 ├── usePanelResize()         # 编辑区/结果区拖拽分割
 ├── useSqlValidation()       # SQL 实时校验
-├── useAutoSave()            # 未保存编辑内容自动持久化
-├── useWordCompletion()       # CodeMirror 词法补全
-├── useCommandPalette()      # 命令面板
+├── useSqlFormatter()        # SQL 格式化
+├── useCompletionCandidates() # CodeMirror 补全候选
 ├── useQueryHistory()        # 查询历史
-└── useExportManager()       # 结果导出
+├── useSavedQueries()        # 已保存查询
+├── useCellEditing()         # 结果集单元格编辑
+└── useColumnResize()        # 结果集列宽调整
 ```
 
 ### 7.4 平台适配
@@ -317,14 +323,14 @@ QueryWorkspace.tsx
 ```
 renderer/src/platform/platform-bridge.ts
 │
-├── __ORBISQL_HARMONY__ === true
-│   └── window.orbisqlHarmony  (鸿蒙原生桥接)
+├── __QUILLDB_HARMONY__ === true
+│   └── createHarmonyApi() / window.orbisqlHarmony  (鸿蒙原生桥接)
 │
 └── 默认 (Electron)
     └── window.omnidb (contextBridge 桥接)
 ```
 
-通过 `__ORBISQL_HARMONY__` 编译时常量和条件编译实现不同平台的适配逻辑，鸿蒙构建使用 `vite.harmony.config.ts` 配置文件。
+通过 `__QUILLDB_HARMONY__` 编译时常量和条件编译实现不同平台的适配逻辑，鸿蒙构建使用 `vite.harmony.config.ts` 配置文件。
 
 ---
 
@@ -457,7 +463,7 @@ expectArray(value, name, options?)   // 数组校验
 ```typescript
 // vite.harmony.config.ts
 // 将 JS/CSS 内联到单个 HTML 文件
-// 通过 __ORBISQL_HARMONY__ 编译常量区分平台
+// 通过 __QUILLDB_HARMONY__ 编译常量区分平台
 ```
 
 ---
@@ -466,9 +472,10 @@ expectArray(value, name, options?)   // 数组校验
 
 | 类别 | 数据库引擎 |
 |------|-----------|
-| **关系型** | MySQL, MariaDB, PostgreSQL, SQLite, SQL Server, Oracle, TiDB, DuckDB |
+| **关系型** | MySQL, MariaDB, PostgreSQL, SQLite, SQL Server, TiDB, DuckDB |
 | **国产数据库** | 达梦 (DM), 人大金仓 (Kingbase) |
 | **列存储** | ClickHouse |
 | **文档型** | MongoDB |
 | **键值型** | Redis |
-| **搜索引擎** | Elasticsearch |
+
+> Oracle、Elasticsearch 的连接选项已保留在界面与能力矩阵中，但适配器尚未实现，属规划中能力。

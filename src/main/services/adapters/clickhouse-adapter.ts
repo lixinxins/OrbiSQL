@@ -16,6 +16,8 @@ import type {
   QueryExecutionResult,
   QueryUpdateRowInput,
   TableDataFilter,
+  TableDataFilterCondition,
+  TableDataFilterOperator,
   TableDefinitionResult,
   MySQLColumnType
 } from '@/shared/connections'
@@ -45,25 +47,28 @@ const normalizedColumnType = (dataType: string): MySQLColumnType => {
 }
 
 const filterClickHouse = (filter: TableDataFilter): string => {
-  const column = `\`${filter.column}\``
-  const textValue = quoteLiteral(filter.value)
-  const textColumn = `toString(${column})`
-  const conditions: Record<TableDataFilter['operator'], string> = {
-    equals: `${column} = ${textValue}`,
-    notEquals: `${column} != ${textValue}`,
-    contains: `${textColumn} LIKE ${quoteLiteral(`%${filter.value}%`)}`,
-    startsWith: `${textColumn} LIKE ${quoteLiteral(`${filter.value}%`)}`,
-    greaterThan: `${column} > ${textValue}`,
-    greaterThanOrEqual: `${column} >= ${textValue}`,
-    lessThan: `${column} < ${textValue}`,
-    lessThanOrEqual: `${column} <= ${textValue}`,
-    isEmpty: `${textColumn} = ''`,
-    isEmptyOrNull: `(${column} IS NULL OR ${textColumn} = '')`,
-    isNotEmpty: `(${column} IS NOT NULL AND ${textColumn} != '')`,
-    isNull: `${column} IS NULL`,
-    isNotNull: `${column} IS NOT NULL`
+  const build = (cond: TableDataFilterCondition): string => {
+    const column = `\`${cond.column}\``
+    const textValue = quoteLiteral(cond.value)
+    const textColumn = `toString(${column})`
+    const conditions: Record<TableDataFilterOperator, string> = {
+      equals: `${column} = ${textValue}`,
+      notEquals: `${column} != ${textValue}`,
+      contains: `${textColumn} LIKE ${quoteLiteral(`%${cond.value}%`)}`,
+      startsWith: `${textColumn} LIKE ${quoteLiteral(`${cond.value}%`)}`,
+      greaterThan: `${column} > ${textValue}`,
+      greaterThanOrEqual: `${column} >= ${textValue}`,
+      lessThan: `${column} < ${textValue}`,
+      lessThanOrEqual: `${column} <= ${textValue}`,
+      isEmpty: `${textColumn} = ''`,
+      isEmptyOrNull: `(${column} IS NULL OR ${textColumn} = '')`,
+      isNotEmpty: `(${column} IS NOT NULL AND ${textColumn} != '')`,
+      isNull: `${column} IS NULL`,
+      isNotNull: `${column} IS NOT NULL`
+    }
+    return conditions[cond.operator]
   }
-  return conditions[filter.operator]
+  return filter.filters.map(build).join(filter.logic === 'OR' ? ' OR ' : ' AND ')
 }
 
 // ── ClickHouse client cache ───────────────────────────────────────────
@@ -340,7 +345,7 @@ export const readChTableData = async (
   offset: number,
   filter?: TableDataFilter
 ): Promise<QueryExecutionResult> => {
-  const where = filter?.column ? ` WHERE ${filterClickHouse(filter)}` : ''
+  const where = filter?.filters?.length ? ` WHERE ${filterClickHouse(filter)}` : ''
   const sqlText = `SELECT * FROM \`${tableName}\`${where} LIMIT ${limit} OFFSET ${offset}`
   const result = await executeChQuery(connection, databaseName, sqlText)
   return result.success && result.rows ? { ...result, message: `已加载 ${result.rows.length} 行数据` } : result

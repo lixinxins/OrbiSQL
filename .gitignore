@@ -26,3 +26,5 @@ resources/omnidb-*.png
 dist-check/
 desktop_ui_preview.html
 
+# 根目录 mock 预览重定向（指向不存在的 preview.html），未被应用引用
+index.html

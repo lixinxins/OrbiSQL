@@ -13,6 +13,7 @@ import type {
   QueryExecutionResult,
   QueryUpdateRowInput,
   TableDataFilter,
+  TableDataFilterCondition,
   TableDefinitionResult,
   MySQLColumnType
 } from '@/shared/connections'
@@ -50,25 +51,30 @@ const toNumericIfPureNumber = (v: string): string | number => {
 }
 
 const buildFilter = (filter: TableDataFilter): Record<string, unknown> => {
-  const col = filter.column
-  const v = filter.value
-  const numVal = toNumericIfPureNumber(v)
-  switch (filter.operator) {
-    case 'equals': return { [col]: numVal }
-    case 'notEquals': return { [col]: { $ne: numVal } }
-    case 'contains': return { [col]: { $regex: escapeRegex(v), $options: 'i' } }
-    case 'startsWith': return { [col]: { $regex: '^' + escapeRegex(v), $options: 'i' } }
-    case 'greaterThan': return { [col]: { $gt: numVal } }
-    case 'greaterThanOrEqual': return { [col]: { $gte: numVal } }
-    case 'lessThan': return { [col]: { $lt: numVal } }
-    case 'lessThanOrEqual': return { [col]: { $lte: numVal } }
-    case 'isEmpty': return { [col]: '' }
-    case 'isEmptyOrNull': return { $or: [{ [col]: '' }, { [col]: null }] }
-    case 'isNotEmpty': return { $and: [{ [col]: { $exists: true } }, { [col]: { $ne: '' } }] }
-    case 'isNull': return { [col]: null }
-    case 'isNotNull': return { [col]: { $ne: null } }
-    default: return {}
+  const buildOne = (cond: TableDataFilterCondition): Record<string, unknown> => {
+    const col = cond.column
+    const v = cond.value
+    const numVal = toNumericIfPureNumber(v)
+    switch (cond.operator) {
+      case 'equals': return { [col]: numVal }
+      case 'notEquals': return { [col]: { $ne: numVal } }
+      case 'contains': return { [col]: { $regex: escapeRegex(v), $options: 'i' } }
+      case 'startsWith': return { [col]: { $regex: '^' + escapeRegex(v), $options: 'i' } }
+      case 'greaterThan': return { [col]: { $gt: numVal } }
+      case 'greaterThanOrEqual': return { [col]: { $gte: numVal } }
+      case 'lessThan': return { [col]: { $lt: numVal } }
+      case 'lessThanOrEqual': return { [col]: { $lte: numVal } }
+      case 'isEmpty': return { [col]: '' }
+      case 'isEmptyOrNull': return { $or: [{ [col]: '' }, { [col]: null }] }
+      case 'isNotEmpty': return { $and: [{ [col]: { $exists: true } }, { [col]: { $ne: '' } }] }
+      case 'isNull': return { [col]: null }
+      case 'isNotNull': return { [col]: { $ne: null } }
+      default: return {}
+    }
   }
+  const parts = filter.filters.filter((cond) => cond.column).map(buildOne)
+  if (parts.length <= 1) return parts[0] ?? {}
+  return filter.logic === 'OR' ? { $or: parts } : { $and: parts }
 }
 
 /** 将 MongoDB 文档中的特殊类型转为可序列化值 */
@@ -399,7 +405,7 @@ export const readMongoTableData = async (
   const startMs = performance.now()
 
   try {
-    const query = filter?.column ? buildFilter(filter) : {}
+    const query = filter?.filters?.length ? buildFilter(filter) : {}
     const docs = await collection.find(query).skip(offset).limit(limit).toArray()
     const rows = docs.map(serializeDoc)
     const allKeys = new Set<string>()

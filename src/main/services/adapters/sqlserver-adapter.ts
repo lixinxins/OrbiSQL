@@ -15,6 +15,8 @@ import type {
   QueryExecutionResult,
   QueryUpdateRowInput,
   TableDataFilter,
+  TableDataFilterCondition,
+  TableDataFilterOperator,
   TableDefinitionResult,
   TableForeignKeyDefinition,
   MySQLColumnType
@@ -49,25 +51,28 @@ const normalizedColumnType = (dataType: string): MySQLColumnType => {
 }
 
 const filterMssql = (filter: TableDataFilter): string => {
-  const column = quoteMssql(filter.column)
-  const textValue = quoteLiteral(filter.value)
-  const textColumn = `CAST(${column} AS NVARCHAR(MAX))`
-  const conditions: Record<TableDataFilter['operator'], string> = {
-    equals: `${column} = ${textValue}`,
-    notEquals: `${column} <> ${textValue}`,
-    contains: `${textColumn} LIKE ${quoteLiteral(`%${filter.value}%`)}`,
-    startsWith: `${textColumn} LIKE ${quoteLiteral(`${filter.value}%`)}`,
-    greaterThan: `${column} > ${textValue}`,
-    greaterThanOrEqual: `${column} >= ${textValue}`,
-    lessThan: `${column} < ${textValue}`,
-    lessThanOrEqual: `${column} <= ${textValue}`,
-    isEmpty: `${textColumn} = N''`,
-    isEmptyOrNull: `(${column} IS NULL OR ${textColumn} = N'')`,
-    isNotEmpty: `(${column} IS NOT NULL AND ${textColumn} <> N'')`,
-    isNull: `${column} IS NULL`,
-    isNotNull: `${column} IS NOT NULL`
+  const build = (cond: TableDataFilterCondition): string => {
+    const column = quoteMssql(cond.column)
+    const textValue = quoteLiteral(cond.value)
+    const textColumn = `CAST(${column} AS NVARCHAR(MAX))`
+    const conditions: Record<TableDataFilterOperator, string> = {
+      equals: `${column} = ${textValue}`,
+      notEquals: `${column} <> ${textValue}`,
+      contains: `${textColumn} LIKE ${quoteLiteral(`%${cond.value}%`)}`,
+      startsWith: `${textColumn} LIKE ${quoteLiteral(`${cond.value}%`)}`,
+      greaterThan: `${column} > ${textValue}`,
+      greaterThanOrEqual: `${column} >= ${textValue}`,
+      lessThan: `${column} < ${textValue}`,
+      lessThanOrEqual: `${column} <= ${textValue}`,
+      isEmpty: `${textColumn} = N''`,
+      isEmptyOrNull: `(${column} IS NULL OR ${textColumn} = N'')`,
+      isNotEmpty: `(${column} IS NOT NULL AND ${textColumn} <> N'')`,
+      isNull: `${column} IS NULL`,
+      isNotNull: `${column} IS NOT NULL`
+    }
+    return conditions[cond.operator]
   }
-  return conditions[filter.operator]
+  return filter.filters.map(build).join(filter.logic === 'OR' ? ' OR ' : ' AND ')
 }
 
 /** 将 SELECT 改写为 TOP N 形式（SQL Server 不支持 LIMIT 语法） */
@@ -363,14 +368,17 @@ export const readMssqlTableData = async (
   offset: number,
   filter?: TableDataFilter
 ): Promise<QueryExecutionResult> => {
-  if (filter?.column) {
+  if (filter?.filters?.length) {
     const pool = await getMssqlPool(connection, databaseName)
-    const colCheck = await pool.request()
-      .input('table', tableName).input('col', filter.column)
-      .query<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM sys.columns WHERE object_id = OBJECT_ID(@table) AND name = @col`)
-    if (!colCheck.recordset[0]?.cnt) return { success: false, message: '筛选字段不存在' }
+    for (const cond of filter.filters) {
+      if (!cond.column) continue
+      const colCheck = await pool.request()
+        .input('table', tableName).input('col', cond.column)
+        .query<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM sys.columns WHERE object_id = OBJECT_ID(@table) AND name = @col`)
+      if (!colCheck.recordset[0]?.cnt) return { success: false, message: `筛选字段不存在：${cond.column}` }
+    }
   }
-  const where = filter?.column ? ` WHERE ${filterMssql(filter)}` : ''
+  const where = filter?.filters?.length ? ` WHERE ${filterMssql(filter)}` : ''
   const sqlText = `SELECT * FROM ${quoteMssql(tableName)}${where}`
   const withOffset = offset > 0 ? applyTopOffset(sqlText, limit, offset) : applyTop(sqlText, limit)
   const result = await executeMssqlQuery(connection, databaseName, withOffset)

@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowLeft, ArrowLineLeft, ArrowLineRight, ArrowRight, ArrowsClockwise, ArrowsInLineHorizontal, Broom, CaretRight, Check, Code, Copy, DownloadSimple, FileCode, Funnel, GearSix, ListBullets, Minus, PencilSimple, Plus, Stop, Table as TableIcon, Trash, X } from '@phosphor-icons/react'
-import type { DatabaseConnection, DatabaseItem, QueryExecutionResult, TableDataFilter, TableDataFilterOperator, TableItem } from '@/shared/connections'
+import type { DatabaseConnection, DatabaseItem, QueryExecutionResult, TableDataFilter, TableDataFilterCondition, TableDataFilterOperator, TableItem } from '@/shared/connections'
 import { useConnectionStore } from '../stores/useConnectionStore'
 import { useConfirmDialog } from './ConfirmDialog'
 import { useToast } from '../contexts/ToastContext'
+import { invalidateTableDataCache, readTableDataCached } from '../utils/table-data-cache'
 
 interface TableDataWorkspaceProps {
   active: boolean
@@ -13,6 +14,22 @@ interface TableDataWorkspaceProps {
   database: DatabaseItem
   table: TableItem
   onDesignTable: (connection: DatabaseConnection, database: DatabaseItem, table: TableItem) => void
+}
+
+const FILTER_OPERATOR_LABELS: Record<TableDataFilterOperator, string> = {
+  contains: '包含',
+  startsWith: '开头是',
+  equals: '等于',
+  notEquals: '不等于',
+  greaterThan: '大于',
+  greaterThanOrEqual: '大于等于',
+  lessThan: '小于',
+  lessThanOrEqual: '小于等于',
+  isEmpty: '为空字符串',
+  isNull: '为 NULL',
+  isEmptyOrNull: '为空或 NULL',
+  isNotEmpty: '非空且非 NULL',
+  isNotNull: '不为 NULL'
 }
 
 function TableDataWorkspace({ active, connection, database, table, onDesignTable }: TableDataWorkspaceProps) {
@@ -26,9 +43,10 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   const [draftValue, setDraftValue] = useState<unknown>('')
   const [savingCell, setSavingCell] = useState(false)
   const [rowSaveError, setRowSaveError] = useState('')
-  const [filterColumn, setFilterColumn] = useState(table.columns[0]?.name ?? '')
-  const [filterOperator, setFilterOperator] = useState<TableDataFilterOperator>('contains')
-  const [filterValue, setFilterValue] = useState('')
+  const [filterDraft, setFilterDraft] = useState<TableDataFilterCondition[]>([
+    { column: table.columns[0]?.name ?? '', operator: 'contains', value: '' }
+  ])
+  const [filterLogic, setFilterLogic] = useState<'AND' | 'OR'>('AND')
   const [appliedFilter, setAppliedFilter] = useState<TableDataFilter | undefined>()
   const [resultContextMenu, setResultContextMenu] = useState<{ x: number; y: number; rowIndex: number; column: string } | null>(null)
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null)
@@ -36,6 +54,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   const [viewMode, setViewMode] = useState<'grid' | 'record'>('grid')
   const [showPageSize, setShowPageSize] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState<number>(0)
+  const [filterExpanded, setFilterExpanded] = useState(false)
   const [detailModal, setDetailModal] = useState<{ rowIndex: number; column: string; text: string } | null>(null)
   const loadRequestId = useRef(0)
 
@@ -61,7 +80,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     }
   }, [resultContextMenu])
 
-  const loadData = useCallback(async (): Promise<void> => {
+  const loadData = useCallback(async (force = false): Promise<void> => {
     const requestId = ++loadRequestId.current
     setLoading(true)
     setEditingCell(null)
@@ -69,13 +88,14 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     setNewRowDraft(null)
     setRowSaveError('')
     try {
-      const res = await window.omnidb.tables.readData(
+      const res = await readTableDataCached(
         connection.id,
         database.name,
         table.name,
         pageSize,
         page * pageSize,
-        appliedFilter
+        appliedFilter,
+        { force }
       )
       if (requestId === loadRequestId.current) {
         setResult(res)
@@ -92,7 +112,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   useEffect(() => {
     if (autoRefresh <= 0 || !active) return
     const timer = setInterval(() => {
-      void loadData()
+      void loadData(true)
     }, autoRefresh * 1000)
     return () => clearInterval(timer)
   }, [active, autoRefresh, loadData])
@@ -104,6 +124,13 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   const displayValue = useCallback((value: unknown): ReactNode => {
     if (value === null) return <span className="cell-null">NULL</span>
     if (value instanceof Uint8Array) return <span className="cell-badge binary">[BLOB {value.byteLength} B]</span>
+    if (value instanceof Date) {
+      const pad = (n: number): string => String(n).padStart(2, '0')
+      const text = Number.isNaN(value.getTime())
+        ? String(value)
+        : `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
+      return <span className="cell-date" title={text}>{text}</span>
+    }
     if (Array.isArray(value)) {
       const jsonStr = JSON.stringify(value)
       return (
@@ -117,7 +144,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
       const jsonStr = JSON.stringify(value)
       return (
         <span className="cell-pg-tag json" title={jsonStr}>
-          <span className="pg-badge">JSONB</span>
+          <span className="pg-badge">JSON</span>
           {jsonStr.length > 35 ? `${jsonStr.slice(0, 35)}…` : jsonStr}
         </span>
       )
@@ -198,6 +225,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
         setRowSaveError(saved.message)
         return
       }
+      invalidateTableDataCache(connection.id, database.name, table.name)
       setResult((current) => current?.rows ? {
         ...current,
         success: true,
@@ -239,6 +267,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
       setRowSaveError(deleted.message)
       return
     }
+    invalidateTableDataCache(connection.id, database.name, table.name)
     setResult((current) => current?.rows ? {
       ...current,
       success: true,
@@ -339,18 +368,57 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
     window.addEventListener('mouseup', handleMouseUp)
   }
   const availableColumns = table.columns.length ? table.columns.map((c) => c.name) : result?.columns ?? []
-  const filterNeedsValue = !['isEmpty', 'isEmptyOrNull', 'isNotEmpty', 'isNull', 'isNotNull'].includes(filterOperator)
+  const filterNeedsValue = (operator: TableDataFilterOperator): boolean =>
+    !['isEmpty', 'isEmptyOrNull', 'isNotEmpty', 'isNull', 'isNotNull'].includes(operator)
+  const validFilterRows = filterDraft.filter((row) =>
+    row.column && (!filterNeedsValue(row.operator) || row.value.trim() !== '')
+  )
+  const canApplyFilter = validFilterRows.length > 0
+
+  const updateFilterRow = (index: number, patch: Partial<TableDataFilterCondition>): void => {
+    setFilterDraft((current) => current.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  }
+
+  const addFilterRow = (): void => {
+    setFilterDraft((current) => [
+      ...current,
+      { column: availableColumns[0] ?? '', operator: 'contains', value: '' }
+    ])
+  }
+
+  const removeFilterRow = (index: number): void => {
+    setFilterDraft((current) => {
+      const next = current.filter((_, i) => i !== index)
+      // 删空后保留一行空条件，避免筛选面板消失
+      return next.length ? next : [{ column: availableColumns[0] ?? '', operator: 'contains', value: '' }]
+    })
+  }
+
+  const removeAppliedCondition = (index: number): void => {
+    if (!appliedFilter) return
+    const nextFilters = appliedFilter.filters.filter((_, i) => i !== index)
+    setPage(0)
+    if (!nextFilters.length) {
+      setAppliedFilter(undefined)
+    } else {
+      setAppliedFilter({ ...appliedFilter, filters: nextFilters })
+    }
+  }
 
   const applyFilter = (): void => {
-    if (!filterColumn || filterNeedsValue && !filterValue.trim()) return
+    if (!canApplyFilter) return
     setPage(0)
-    setAppliedFilter({ column: filterColumn, operator: filterOperator, value: filterValue })
+    setAppliedFilter({
+      filters: validFilterRows.map((row) => ({ column: row.column, operator: row.operator, value: row.value })),
+      logic: filterLogic
+    })
   }
 
   const resetFilter = (): void => {
     setPage(0)
     setAppliedFilter(undefined)
-    setFilterValue('')
+    setFilterLogic('AND')
+    setFilterDraft([{ column: table.columns[0]?.name ?? '', operator: 'contains', value: '' }])
   }
 
   const selectSql = `SELECT * FROM ${sqlIdentifier(table.name)}${appliedFilter ? ' WHERE …' : ''} LIMIT ${pageSize} OFFSET ${page * pageSize}`
@@ -470,9 +538,6 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
   return (
     <section className={`table-data-workspace${active ? ' active' : ''}`}>
       <div className="table-data-toolbar">
-        <div className="table-data-location">
-          <strong>{table.name}</strong><span>{connection.name} / {database.name}</span>
-        </div>
         <button type="button" onClick={() => onDesignTable(connection, database, table)}><PencilSimple />设计字段</button>
         <button
           type="button"
@@ -484,43 +549,136 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
         >
           <ArrowsClockwise />刷新表
         </button>
+        <span className="table-data-toolbar-divider" />
         <button type="button" disabled={!result?.rows?.length} onClick={() => exportGridData('csv')}><DownloadSimple />导出 CSV</button>
         <button type="button" disabled={!result?.rows?.length} onClick={() => exportGridData('json')}><DownloadSimple />导出 JSON</button>
+        <span className="table-data-toolbar-divider" />
+        <button
+          type="button"
+          className={`table-data-filter-toggle${filterExpanded ? ' active' : ''}${appliedFilter ? ' has-filter' : ''}`}
+          onClick={() => setFilterExpanded((current) => !current)}
+          title={filterExpanded ? '收起筛选' : '展开筛选'}
+        >
+          <Funnel weight={appliedFilter ? 'fill' : 'regular'} />
+          筛选
+          {appliedFilter && <span className="filter-applied-dot" />}
+        </button>
         <span className="table-data-toolbar-spacer" />
+        <div className="table-data-location">
+          <strong>{table.name}</strong><span>{connection.name} / {database.name}</span>
+        </div>
       </div>
-      <div className="table-data-filter">
-        <Funnel />
-        <span>筛选</span>
-        <select value={filterColumn} onChange={(event) => setFilterColumn(event.target.value)} aria-label="筛选字段">
-          {!availableColumns.length && <option value="">暂无字段</option>}
-          {availableColumns.map((column) => <option value={column} key={column}>{column}</option>)}
-        </select>
-        <select value={filterOperator} onChange={(event) => setFilterOperator(event.target.value as TableDataFilterOperator)} aria-label="筛选条件">
-          <option value="contains">包含</option>
-          <option value="startsWith">开头是</option>
-          <option value="equals">等于</option>
-          <option value="notEquals">不等于</option>
-          <option value="greaterThan">大于</option>
-          <option value="greaterThanOrEqual">大于等于</option>
-          <option value="lessThan">小于</option>
-          <option value="lessThanOrEqual">小于等于</option>
-          <option value="isEmpty">为空字符串</option>
-          <option value="isNull">为 NULL</option>
-          <option value="isEmptyOrNull">为空或 NULL</option>
-          <option value="isNotEmpty">非空且非 NULL</option>
-          <option value="isNotNull">不为 NULL</option>
-        </select>
-        <input
-          value={filterValue}
-          disabled={!filterNeedsValue}
-          onChange={(event) => setFilterValue(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter') applyFilter() }}
-          placeholder={filterNeedsValue ? '输入筛选值' : '不需要输入值'}
-        />
-        <button type="button" className="apply-filter" disabled={!filterColumn || filterNeedsValue && !filterValue.trim()} onClick={applyFilter}>应用</button>
-        <button type="button" className="reset-filter" disabled={!appliedFilter} onClick={resetFilter}><X />重置</button>
-        {appliedFilter && <span className="active-filter-label">已应用：{appliedFilter.column}</span>}
-      </div>
+      {filterExpanded && (
+        <div className="table-data-filter">
+          <div className="table-data-filter-header">
+            <span className="filter-panel-title"><Funnel size={13} weight="duotone" />筛选条件</span>
+            <div className="filter-logic-switch" role="group" aria-label="条件组合方式">
+              <button
+                type="button"
+                className={filterLogic === 'AND' ? 'active' : ''}
+                onClick={() => setFilterLogic('AND')}
+                title="所有条件都满足时匹配"
+              >
+                满足全部（AND）
+              </button>
+              <button
+                type="button"
+                className={filterLogic === 'OR' ? 'active' : ''}
+                onClick={() => setFilterLogic('OR')}
+                title="任一条件满足时匹配"
+              >
+                满足任一（OR）
+              </button>
+            </div>
+            <span className="table-data-filter-header-spacer" />
+            {appliedFilter && (
+              <div className="table-data-applied-filters">
+                {appliedFilter.filters.map((cond, index) => (
+                  <span className="applied-filter-chip" key={`${cond.column}-${index}`}>
+                    <span className="applied-filter-text">
+                      {cond.column} {FILTER_OPERATOR_LABELS[cond.operator]}{cond.value ? ` ${cond.value}` : ''}
+                    </span>
+                    <button
+                      type="button"
+                      className="applied-filter-remove"
+                      title="删除该条件"
+                      onClick={() => removeAppliedCondition(index)}
+                    >
+                      <X size={12} weight="bold" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className="filter-panel-close"
+              title="收起筛选"
+              onClick={() => setFilterExpanded(false)}
+            >
+              <X size={13} weight="bold" />
+            </button>
+          </div>
+          <div className="table-data-filter-rows">
+            {filterDraft.map((row, index) => (
+              <div className="table-data-filter-row" key={index}>
+                <span className="filter-row-index">{String(index + 1).padStart(2, '0')}</span>
+                <select
+                  className="filter-row-field"
+                  value={row.column}
+                  onChange={(event) => updateFilterRow(index, { column: event.target.value })}
+                  aria-label="筛选字段"
+                >
+                  {!availableColumns.length && <option value="">暂无字段</option>}
+                  {availableColumns.map((column) => <option value={column} key={column}>{column}</option>)}
+                </select>
+                <select
+                  className="filter-row-operator"
+                  value={row.operator}
+                  onChange={(event) => updateFilterRow(index, { operator: event.target.value as TableDataFilterOperator })}
+                  aria-label="筛选条件"
+                >
+                  <option value="contains">包含</option>
+                  <option value="startsWith">开头是</option>
+                  <option value="equals">等于</option>
+                  <option value="notEquals">不等于</option>
+                  <option value="greaterThan">大于</option>
+                  <option value="greaterThanOrEqual">大于等于</option>
+                  <option value="lessThan">小于</option>
+                  <option value="lessThanOrEqual">小于等于</option>
+                  <option value="isEmpty">为空字符串</option>
+                  <option value="isNull">为 NULL</option>
+                  <option value="isEmptyOrNull">为空或 NULL</option>
+                  <option value="isNotEmpty">非空且非 NULL</option>
+                  <option value="isNotNull">不为 NULL</option>
+                </select>
+                <input
+                  className="filter-row-value"
+                  value={row.value}
+                  disabled={!filterNeedsValue(row.operator)}
+                  onChange={(event) => updateFilterRow(index, { value: event.target.value })}
+                  onKeyDown={(event) => { if (event.key === 'Enter') applyFilter() }}
+                  placeholder={filterNeedsValue(row.operator) ? '输入筛选值' : '不需要输入值'}
+                />
+                <button
+                  type="button"
+                  className="filter-row-remove"
+                  title="删除该条件"
+                  onClick={() => removeFilterRow(index)}
+                >
+                  <X size={14} weight="bold" />
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="table-data-filter-actions">
+            <button type="button" className="filter-add-row" onClick={addFilterRow}><Plus size={13} weight="bold" />添加条件</button>
+            <span className="table-data-filter-actions-spacer" />
+            <button type="button" className="reset-filter" disabled={!appliedFilter} onClick={resetFilter}><X size={12} weight="bold" />清空筛选</button>
+            <button type="button" className="apply-filter" disabled={!canApplyFilter} onClick={applyFilter}><Check size={13} weight="bold" />应用筛选</button>
+          </div>
+        </div>
+      )}
       {(rowSaveError || result && !result.success) && <div className="query-message error">
         <span>{rowSaveError || result?.message}</span>
       </div>}
@@ -571,11 +729,10 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
                   const editableColumn = editableColumnMap.get(column)
                   const isEditing = editingCell?.rowIndex === virtualRow.index && editingCell.column === column
                   const width = columnWidthMap.get(column) ?? 150
-                  const cellWidth = isEditing ? Math.max(width, 310) : width
                   return <td
                     key={column}
-                    className={`${editableColumn ? 'editable-cell' : ''}${isEditing ? ' editing-cell' : ''}`}
-                    style={{ width: `${cellWidth}px`, minWidth: `${cellWidth}px` }}
+                    className={`${editableColumn ? 'editable-cell' : ''}${isEditing ? ' editing-cell table-data-editing-cell' : ''}`}
+                    style={{ width: `${width}px`, minWidth: `${width}px` }}
                     onClick={() => {
                       setSelectedRowIndex(virtualRow.index)
                       if (editableColumn && !isEditing) startEditingCell(virtualRow.index, column)
@@ -618,6 +775,7 @@ function TableDataWorkspace({ active, connection, database, table, onDesignTable
           </div>
         )}
         {viewMode === 'grid' && result?.success && !rows.length && !newRowDraft && <div className="table-data-empty">当前数据表中没有数据</div>}
+        {loading && <div className="table-data-loading"><span>加载中…</span></div>}
       </div>
       <div className="table-data-bottom-toolbar">
         <div className="table-data-bottom-actions">

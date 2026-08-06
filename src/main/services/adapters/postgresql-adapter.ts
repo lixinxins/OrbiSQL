@@ -24,6 +24,8 @@ import type {
   TableColumn,
   TableColumnDefinition,
   TableDataFilter,
+  TableDataFilterCondition,
+  TableDataFilterOperator,
   TableDefinitionResult,
   TableForeignKeyDefinition,
   TableIndexDefinition
@@ -68,25 +70,28 @@ const closeWriteStream = (stream: ReturnType<typeof createWriteStream>): Promise
   })
 
 const filterSql = (filter: TableDataFilter): string => {
-  const column = quotePg(filter.column)
-  const textValue = quoteLiteral(filter.value)
-  const textColumn = `CAST(${column} AS TEXT)`
-  const conditions: Record<TableDataFilter['operator'], string> = {
-    equals: `${column} = ${textValue}`,
-    notEquals: `${column} <> ${textValue}`,
-    contains: `${textColumn} LIKE ${quoteLiteral(`%${filter.value}%`)}`,
-    startsWith: `${textColumn} LIKE ${quoteLiteral(`${filter.value}%`)}`,
-    greaterThan: `${column} > ${textValue}`,
-    greaterThanOrEqual: `${column} >= ${textValue}`,
-    lessThan: `${column} < ${textValue}`,
-    lessThanOrEqual: `${column} <= ${textValue}`,
-    isEmpty: `${textColumn} = ''`,
-    isEmptyOrNull: `(${column} IS NULL OR ${textColumn} = '')`,
-    isNotEmpty: `(${column} IS NOT NULL AND ${textColumn} <> '')`,
-    isNull: `${column} IS NULL`,
-    isNotNull: `${column} IS NOT NULL`
+  const build = (cond: TableDataFilterCondition): string => {
+    const column = quotePg(cond.column)
+    const textValue = quoteLiteral(cond.value)
+    const textColumn = `CAST(${column} AS TEXT)`
+    const conditions: Record<TableDataFilterOperator, string> = {
+      equals: `${column} = ${textValue}`,
+      notEquals: `${column} <> ${textValue}`,
+      contains: `${textColumn} LIKE ${quoteLiteral(`%${cond.value}%`)}`,
+      startsWith: `${textColumn} LIKE ${quoteLiteral(`${cond.value}%`)}`,
+      greaterThan: `${column} > ${textValue}`,
+      greaterThanOrEqual: `${column} >= ${textValue}`,
+      lessThan: `${column} < ${textValue}`,
+      lessThanOrEqual: `${column} <= ${textValue}`,
+      isEmpty: `${textColumn} = ''`,
+      isEmptyOrNull: `(${column} IS NULL OR ${textColumn} = '')`,
+      isNotEmpty: `(${column} IS NOT NULL AND ${textColumn} <> '')`,
+      isNull: `${column} IS NULL`,
+      isNotNull: `${column} IS NOT NULL`
+    }
+    return conditions[cond.operator]
   }
-  return conditions[filter.operator]
+  return filter.filters.map(build).join(filter.logic === 'OR' ? ' OR ' : ' AND ')
 }
 
 const groupBy = <Row>(rows: Row[], key: (row: Row) => string, value: (row: Row) => string): Map<string, string[]> => {
@@ -646,20 +651,23 @@ export const readPostgreSqlTableData = async (
   offset: number,
   filter?: TableDataFilter
 ): Promise<QueryExecutionResult> => {
-  if (filter?.column) {
+  if (filter?.filters?.length) {
     const pool = getPostgresPool(connection, databaseName)
     const client = await pool.connect()
     try {
-      const column = await client.query(
-        "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
-        [tableName, filter.column]
-      )
-      if (!column.rowCount) return { success: false, message: '筛选字段不存在' }
+      for (const cond of filter.filters) {
+        if (!cond.column) continue
+        const column = await client.query(
+          "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
+          [tableName, cond.column]
+        )
+        if (!column.rowCount) return { success: false, message: `筛选字段不存在：${cond.column}` }
+      }
     } finally {
       client.release()
     }
   }
-  const where = filter?.column ? ` WHERE ${filterSql(filter)}` : ''
+  const where = filter?.filters?.length ? ` WHERE ${filterSql(filter)}` : ''
   const result = await executePostgreSqlQuery(connection, databaseName, `SELECT * FROM ${quotePg(tableName)}${where} LIMIT ${limit} OFFSET ${offset}`)
   return result.success && result.rows ? { ...result, message: `已加载 ${result.rows.length} 行数据` } : result
 }

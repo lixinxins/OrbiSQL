@@ -42,13 +42,11 @@ const engineDefaults: Partial<Record<ConnectionProtocol, Pick<CreateConnectionIn
   PostgreSQL: { host: 'localhost', port: 5432, username: 'postgres', defaultDatabase: 'postgres' },
   SQLite: { host: '', port: 0, username: '', defaultDatabase: '' },
   'SQL Server': { host: 'localhost', port: 1433, username: 'sa', defaultDatabase: 'master' },
-  Oracle: { host: 'localhost', port: 1521, username: 'SYSTEM', defaultDatabase: 'ORCL' },
   TiDB: { host: 'localhost', port: 4000, username: 'root', defaultDatabase: 'test' },
   ClickHouse: { host: 'localhost', port: 8123, username: 'default', defaultDatabase: 'default' },
   MongoDB: { host: 'localhost', port: 27017, username: 'admin', defaultDatabase: 'admin' },
   Redis: { host: 'localhost', port: 6379, username: '', defaultDatabase: '0' },
   DuckDB: { host: '', port: 0, username: '', defaultDatabase: '' },
-  Elasticsearch: { host: 'localhost', port: 9200, username: 'elastic', defaultDatabase: '' },
   达梦: { host: 'localhost', port: 5236, username: 'SYSDBA', defaultDatabase: '' },
   人大金仓: { host: 'localhost', port: 54321, username: 'SYSTEM', defaultDatabase: 'security' },
   SSH: { host: '', port: 22, username: 'root', defaultDatabase: '' }
@@ -437,7 +435,7 @@ function ConnectionDialog({ editingConnection, onClose, onSaved }: ConnectionDia
                       <option value="PostgreSQL">PostgreSQL</option>
                       <option value="MariaDB">MariaDB</option>
                       <option value="SQL Server">SQL Server (MSSQL)</option>
-                      <option value="Oracle">Oracle Database</option>
+                      <option value="Oracle" disabled>Oracle Database（规划中，暂不支持）</option>
                       <option value="SQLite">SQLite (本地文件)</option>
                       <option value="TiDB">TiDB (分布式)</option>
                     </optgroup>
@@ -450,7 +448,7 @@ function ConnectionDialog({ editingConnection, onClose, onSaved }: ConnectionDia
                       <option value="DuckDB">DuckDB (嵌入式 OLAP 分析数据库)</option>
                       <option value="Redis">Redis (内存键值分析)</option>
                       <option value="MongoDB">MongoDB (文档型 NoSQL 分析)</option>
-                      <option value="Elasticsearch">Elasticsearch (搜索引擎 / 日志分析)</option>
+                      <option value="Elasticsearch" disabled>Elasticsearch（规划中，暂不支持）</option>
                     </optgroup>
                   </select>
                 </label>

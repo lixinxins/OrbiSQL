@@ -31,7 +31,7 @@ export interface EngineCapabilities {
   displayName: string
 }
 
-/** 15 个引擎的能力声明 */
+/** 13 个引擎的能力声明（Oracle / Elasticsearch 规划中，未实现适配器） */
 export const engineCapabilities: Record<string, EngineCapabilities> = {
   mysql: {
     schemas: false,
@@ -83,16 +83,6 @@ export const engineCapabilities: Record<string, EngineCapabilities> = {
     quoteChar: '[',
     displayName: 'SQL Server'
   },
-  oracle: {
-    schemas: true,
-    objectTypes: ['tables', 'views', 'functions', 'procedures', 'sequences', 'packages', 'triggers', 'indexes', 'foreignKeys', 'checkConstraints', 'materializedViews', 'synonyms'],
-    maintenance: [],
-    supportsRenameDatabase: false,
-    supportsDropDatabase: true,
-    supportsProcessList: true,
-    quoteChar: '"',
-    displayName: 'Oracle'
-  },
   tidb: {
     schemas: false,
     objectTypes: ['tables', 'views', 'triggers', 'indexes', 'foreignKeys', 'checkConstraints'],
@@ -142,16 +132,6 @@ export const engineCapabilities: Record<string, EngineCapabilities> = {
     supportsProcessList: false,
     quoteChar: '"',
     displayName: 'DuckDB'
-  },
-  elasticsearch: {
-    schemas: false,
-    objectTypes: ['aliases', 'dataStreams', 'mappings'],
-    maintenance: [],
-    supportsRenameDatabase: false,
-    supportsDropDatabase: false,
-    supportsProcessList: false,
-    quoteChar: '"',
-    displayName: 'Elasticsearch'
   },
   '达梦': {
     schemas: true,

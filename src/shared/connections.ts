@@ -211,10 +211,17 @@ export type TableDataFilterOperator =
   | 'isNull'
   | 'isNotNull'
 
-export interface TableDataFilter {
+export interface TableDataFilterCondition {
   column: string
   operator: TableDataFilterOperator
   value: string
+}
+
+export interface TableDataFilter {
+  /** 多个筛选条件（支持多字段组合） */
+  filters: TableDataFilterCondition[]
+  /** 条件组合方式：AND（默认）或 OR */
+  logic?: 'AND' | 'OR'
 }
 
 export type MySQLColumnType =

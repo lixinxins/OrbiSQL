@@ -4,6 +4,7 @@ import SearchableSelect from '../SearchableSelect'
 import type { DatabaseConnection, DatabaseItem, TableItem } from '@/shared/connections'
 import type { DiffRow, TableTarget } from './types'
 import { labelStatus } from './types'
+import { readTableDataCached } from '../../utils/table-data-cache'
 
 interface DataDiffViewProps {
   connectionOptions: Array<{ value: string; label: string }>
@@ -82,14 +83,14 @@ export default function DataDiffView({
     setMessage('')
     try {
       const [left, right] = await Promise.all([
-        window.omnidb.tables.readData(
+        readTableDataCached(
           sourceTarget.connection.id,
           sourceTarget.database.name,
           sourceTarget.table.name,
           5000,
           0
         ),
-        window.omnidb.tables.readData(
+        readTableDataCached(
           targetTarget.connection.id,
           targetTarget.database.name,
           targetTarget.table.name,

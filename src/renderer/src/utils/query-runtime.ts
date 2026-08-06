@@ -8,6 +8,7 @@ import type {
   QueryStatementResult,
   TableDataFilter
 } from '@/shared/connections'
+import { readTableDataCached } from './table-data-cache'
 
 // ── 常量 ────────────────────────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ export const readTableData = async (
   offset: number,
   filter?: TableDataFilter
 ): Promise<QueryExecutionResult> => {
-  return window.omnidb.tables.readData(connectionId, databaseName, tableName, limit, offset, filter)
+  return readTableDataCached(connectionId, databaseName, tableName, limit, offset, filter)
 }
 
 // ── 事务管理 ─────────────────────────────────────────────────────────────

@@ -247,6 +247,17 @@
 .db-tables-table tr:hover .table-row-actions { opacity: 1; }
 .table-row-actions button { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; transition: all 120ms ease; }
 .table-row-actions button:hover { border-color: var(--border); background: var(--bg-surface); color: var(--primary); }
+
+/* ── 数据表列表颜色修正 ── */
+/* 浅色主题：白色表体行 + 灰色表头，悬停/选中可见 */
+:root[data-theme='light'] .db-tables-table td { background: #ffffff; }
+:root[data-theme='light'] .db-tables-table tr:hover td { background: #f1f5f9; }
+:root[data-theme='light'] .db-tables-table tr.selected td { background: #e0e7ff; }
+:root[data-theme='light'] .db-tables-table .count-badge { background: #f1f5f9; color: #334155; }
+:root[data-theme='light'] .db-tables-table .count-badge.muted { color: #64748b; }
+/* 经典深色主题：表头文字提亮，主按钮改用深色文字保证对比度 */
+:root[data-theme='classic'] .db-tables-table th { color: var(--text-secondary); }
+:root[data-theme='classic'] .database-tables-actions .action-btn.primary { color: #062a3a; }
 /* Database comparison, ER and routine tools */
 .advanced-tools-backdrop { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 24px; background: rgba(15, 23, 42, .32); backdrop-filter: blur(4px); -webkit-app-region: no-drag; }
 .advanced-tools-dialog { width: min(1120px, calc(100vw - 48px)); height: min(780px, calc(100vh - 48px)); min-height: 560px; display: grid; grid-template-rows: 68px 48px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border); border-radius: 15px; background: var(--bg-surface); color: var(--text); box-shadow: 0 24px 70px rgba(15, 23, 42, .28); }

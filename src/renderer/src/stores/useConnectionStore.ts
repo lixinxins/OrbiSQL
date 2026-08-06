@@ -1,16 +1,19 @@
 import { create } from 'zustand'
 import type { ConnectionEnvironment, DatabaseConnection, DatabaseItem } from '@/shared/connections'
+import { cachedRequest, invalidateCachePrefix } from '../utils/request-cache'
 import { useDialogStore } from './useDialogStore'
 
 export interface ConnectionState {
   connections: DatabaseConnection[]
   connectionLatencies: Record<number, number>
   connectionsLoading: boolean
+  connectionsError: string | null
   groupsRefreshRequest: number
   actions: {
     setConnections: (connections: DatabaseConnection[]) => void
     setConnectionLatency: (connectionId: number, latency: number | null) => void
     setConnectionsLoading: (loading: boolean) => void
+    setConnectionsError: (error: string | null) => void
     setGroupsRefreshRequest: (updater: number | ((prev: number) => number)) => void
     loadConnections: () => Promise<DatabaseConnection[]>
     refreshConnection: (connectionId: number) => Promise<void>
@@ -37,6 +40,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   connections: [],
   connectionLatencies: {},
   connectionsLoading: true,
+  connectionsError: null,
   groupsRefreshRequest: 0,
 
   actions: {
@@ -52,16 +56,27 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
 
     setConnectionsLoading: (loading) => set({ connectionsLoading: loading }),
 
+    setConnectionsError: (error) => set({ connectionsError: error }),
+
     setGroupsRefreshRequest: (updater) => {
       set((state) => ({ groupsRefreshRequest: typeof updater === 'function' ? (updater as (prev: number) => number)(state.groupsRefreshRequest) : updater }))
     },
 
     loadConnections: async () => {
-      set({ connectionsLoading: true })
+      set({ connectionsLoading: true, connectionsError: null })
       try {
-        const loadedConnections = await window.omnidb.connections.list()
+        // 并发去重：多个组件同时挂载/刷新时只发一次 IPC
+        const loadedConnections = await cachedRequest(
+          'connections:list',
+          () => window.omnidb.connections.list(),
+          { ttlMs: 0 }
+        )
         set({ connections: loadedConnections })
         return loadedConnections
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        set({ connectionsError: message })
+        return get().connections
       } finally {
         set({ connectionsLoading: false })
       }
@@ -70,6 +85,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     refreshConnection: async (connectionId) => {
       const updated = await window.omnidb.connections.getOne(connectionId)
       if (updated) {
+        invalidateCachePrefix(`db-meta:${connectionId}:`)
         set((state) => ({
           connections: state.connections.map((c) => (c.id === connectionId ? updated : c))
         }))
@@ -83,6 +99,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       if (!updatedConn) return
       const targetDb = updatedConn.databases.find((d) => d.name === databaseName)
       if (!targetDb) return
+      invalidateCachePrefix(`db-meta:${connectionId}:`)
 
       set((state) => ({
         connections: state.connections.map((c) => {
@@ -101,6 +118,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       const defRes = await window.omnidb.tables.getDefinition(connectionId, databaseName, tableName)
       if (!defRes.success || !defRes.columns) return
       const cols = defRes.columns
+      invalidateCachePrefix(`db-meta:${connectionId}:`)
 
       set((state) => ({
         connections: state.connections.map((c) => {
@@ -134,23 +152,35 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     toggleConnection: async (connection) => {
       const isOpening = !connection.open
       const startTime = performance.now()
-      console.warn('[ConnectionStore] toggleConnection start', { id: connection.id, isOpening })
+      // 乐观更新：先翻转 UI 状态，失败时回滚
+      set((state) => ({
+        connections: state.connections.map((c) => (c.id === connection.id ? { ...c, open: isOpening } : c))
+      }))
       try {
         const result = isOpening
           ? await window.omnidb.connections.open(connection.id)
           : await window.omnidb.connections.close(connection.id)
-        console.warn('[ConnectionStore] IPC result', result)
+        if (!result.success) {
+          // 回滚乐观状态
+          set((state) => ({
+            connections: state.connections.map((c) => (c.id === connection.id ? { ...c, open: connection.open } : c))
+          }))
+          return result
+        }
         await get().actions.refreshConnection(connection.id)
         const elapsed = Math.round(performance.now() - startTime)
 
-        if (isOpening && result.success) {
+        if (isOpening) {
           get().actions.setConnectionLatency(connection.id, elapsed)
-        } else if (!isOpening) {
+        } else {
           get().actions.setConnectionLatency(connection.id, null)
         }
         return result
       } catch (err) {
-        console.error('[ConnectionStore] toggleConnection caught error', err)
+        // 回滚乐观状态
+        set((state) => ({
+          connections: state.connections.map((c) => (c.id === connection.id ? { ...c, open: connection.open } : c))
+        }))
         return { success: false, message: err instanceof Error ? err.message : String(err) }
       }
     },
@@ -277,7 +307,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     },
 
     loadDatabaseMetadata: async (connectionId, databaseName) => {
-      const detail = await window.omnidb.connections.readDatabaseDetail(connectionId, databaseName)
+      // 并发去重 + 60s TTL：同一数据库详情短时间内只请求一次
+      const detail = await cachedRequest(
+        `db-meta:${connectionId}:${databaseName}`,
+        () => window.omnidb.connections.readDatabaseDetail(connectionId, databaseName),
+        { ttlMs: 60_000 }
+      )
       if (!detail) return null
       get().actions.mergeDatabaseDetail(connectionId, detail)
       return detail

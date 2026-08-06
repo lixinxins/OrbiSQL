@@ -9,6 +9,7 @@ import {
 } from '@phosphor-icons/react'
 import type { DatabaseConnection, DatabaseItem, TableItem, TableColumn } from '@/shared/connections'
 import type { AdvancedToolMode } from './types'
+import { useConnectionStore } from '../../stores/useConnectionStore'
 import SchemaDiffView from './SchemaDiffView'
 import DataDiffView from './DataDiffView'
 import DataTransferView from './DataTransferView'
@@ -38,7 +39,7 @@ export default function DatabaseAdvancedTools({
 
   // 挂载时只加载连接列表（不打开任何连接）
   useEffect(() => {
-    void window.omnidb.connections.list().then((all) => {
+    void useConnectionStore.getState().actions.loadConnections().then((all) => {
       setAvailableConnections(all.filter((c) => c.engine !== 'SSH'))
     })
     return () => {
@@ -56,7 +57,7 @@ export default function DatabaseAdvancedTools({
         const result = await window.omnidb.connections.open(connectionId)
         if (!result.success) return []
         openedIdsRef.current.add(connectionId)
-        const all = await window.omnidb.connections.list()
+        const all = await useConnectionStore.getState().actions.loadConnections()
         const conn = all.find((c) => c.id === connectionId)
         const databases = conn?.databases ?? []
         setDatabasesByConnection((prev) => ({ ...prev, [connectionId]: databases }))
@@ -74,7 +75,8 @@ export default function DatabaseAdvancedTools({
       const dbKey = `${connectionId}\0${databaseName}`
       if (tablesByDbKey[dbKey]) return tablesByDbKey[dbKey]
       try {
-        const definition = await window.omnidb.connections.getOne(connectionId)
+        await useConnectionStore.getState().actions.refreshConnection(connectionId)
+        const definition = useConnectionStore.getState().connections.find((c) => c.id === connectionId)
         const db = definition?.databases.find((d) => d.name === databaseName)
         const tables = db?.tables ?? []
         // 如果 light 模式下没有列信息，逐个加载表定义

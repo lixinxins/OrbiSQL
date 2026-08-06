@@ -147,6 +147,13 @@ const createApplicationMenu = (): void => {
         { label: label('放大', 'Zoom In'), role: 'zoomIn' },
         { label: label('缩小', 'Zoom Out'), role: 'zoomOut' },
         { type: 'separator' },
+        // 仅开发模式（未打包）显示开发者工具，macOS 快捷键 Cmd+Option+I
+        {
+          label: label('切换开发者工具', 'Toggle Developer Tools'),
+          role: 'toggleDevTools',
+          accelerator: process.platform === 'darwin' ? 'Alt+Command+I' : 'F12',
+          visible: !app.isPackaged
+        },
         { label: label('进入全屏', 'Toggle Full Screen'), role: 'togglefullscreen' }
       ]
     },
@@ -216,7 +223,8 @@ const createWindow = (): void => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      devTools: false,
+      // 开发模式（未打包）保留开发者工具；生产打包版禁用
+      devTools: !app.isPackaged,
       // 后台节流：窗口最小化或隐藏时，Electron 自动降低 requestAnimationFrame 频率、
       // 暂停 setTimeout/setInterval，减少渲染进程 CPU 与内存消耗
       backgroundThrottling: true

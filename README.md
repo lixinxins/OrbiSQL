@@ -4,7 +4,7 @@
 
 <h1 align="center">QuillDB</h1>
 
-<p align="center">面向开发者与数据库管理员的现代化、跨平台开源数据库工作台。</p>
+<p align="center">A modern, open-source, cross-platform database workbench for developers and database administrators.</p>
 
 <p align="center">
   <a href="https://github.com/lixinxins/QuillDB/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
@@ -14,12 +14,184 @@
 </p>
 
 <p align="center">
-  <img src="宣传素材/quilldb-social-cover.png" width="100%" alt="QuillDB 开源跨平台数据库管理工具" />
+  <img src="宣传素材/quilldb-social-cover.png" width="100%" alt="QuillDB - Open source cross-platform database management tool" />
 </p>
+
+## Introduction
+
+QuillDB is built with Electron, React, and TypeScript for macOS, Windows, and Linux. It brings multi-database connection management, object browsing, SQL editing and execution, data maintenance, import/export, SSH/SFTP, and an AI database assistant together in one desktop workbench — suited for daily development, data troubleshooting, and database operations.
+
+It currently supports 12 database engines out of the box: MySQL, MariaDB, PostgreSQL, SQLite, SQL Server, TiDB, ClickHouse, MongoDB, Redis, DuckDB, DM (达梦), and KingbaseES (人大金仓). Oracle and Elasticsearch connection options remain in the UI as planned capabilities; their adapters are not implemented yet. The repository also keeps the HarmonyOS ArkWeb build configuration, while the client project itself is not distributed with the repository.
+
+> The current stable release is `1.0.1`. Issues, feature suggestions, and pull requests are welcome.
+
+## UI Preview
+
+### Workbench
+
+Manage different database and SSH connections in one place, with groups, search, and a hierarchical object tree that lets you quickly jump into database, schema, table, query, and terminal workspaces. The Smart Workbench shows connection status, query activity, data size, and recent operations at a glance.
+
+<p align="center">
+  <img src="系统截图/首页截图.png" width="100%" alt="QuillDB Workbench" />
+</p>
+
+### SQL Query & Data Browsing
+
+The query workspace supports SQL highlighting and validation, running the selected statement or the statement under the cursor, execution plans, formatting, minification, and query history. The result area supports batched loading of large result sets, copying, inline editing, and row deletion. The table page provides filtering, pagination, column design, and data import/export.
+
+<table>
+  <tr>
+    <td width="50%"><img src="系统截图/查询页.png" alt="QuillDB SQL query page" /></td>
+    <td width="50%"><img src="系统截图/数表打开页.png" alt="QuillDB table data page" /></td>
+  </tr>
+  <tr>
+    <td align="center">SQL query and result set</td>
+    <td align="center">Table data browsing and filtering</td>
+  </tr>
+</table>
+
+### AI Database Assistant
+
+Generate queries and analyze SQL or database structures from natural language within the context of the current connection and database. Read operations can be executed directly; write and high-risk operations still require user confirmation.
+
+## Features
+
+- Manage 12 database engines plus standalone SSH connections
+- Group, search, sort, import/export database and SSH connections with environment labels
+- SSH tunneling, interactive terminal, and SFTP file management with password and private key auth
+- SSL/TLS secure connections with CA and client certificate support
+- Connections stored locally; passwords encrypted via Electron `safeStorage`
+- Engine-aware object browsing: databases, schemas, tables, views, columns, indexes, foreign keys, functions, procedures, triggers, and more
+- Full object-tree context menus: expand/collapse, refresh, copy name, create, edit, query, maintain, and delete
+- Multi-tab SQL editor with syntax highlighting, column validation, clear selection, copy, and run-selected-only
+- Execution plans, SQL formatting and minification, query history, and saved queries
+- Cursor-based batched loading for large result sets, result copying, editable result sets, and error location
+- Table creation, structure design, rename, copy, truncate, and delete
+- Table data viewing, filtering, pagination, cell editing, record insert, and delete
+- SQL, CSV, JSON, and Excel import/export with preview, column mapping, and progress feedback
+- AI database assistant that generates, explains, and analyzes SQL in the current connection context
+- English and Chinese interface languages
+- Light and classic themes, resizable and collapsible database sidebar
+- Build configurations for macOS, Windows, and Linux installers
+- HarmonyOS ArkWeb build configuration (client project not distributed with the repo)
+
+## Supported Databases
+
+| Category | Built-in engines |
+| --- | --- |
+| MySQL ecosystem | MySQL, MariaDB, TiDB |
+| PostgreSQL ecosystem | PostgreSQL, KingbaseES |
+| Commercial relational | SQL Server, DM |
+| Embedded analytical | SQLite, DuckDB |
+| Distributed & NoSQL | ClickHouse, MongoDB, Redis |
+
+Object types, DDL, result editing, and maintenance capabilities vary by engine; the UI dynamically shows available actions based on engine capabilities. Please back up important data before making structural changes or writing operations.
+
+> Oracle and Elasticsearch currently only keep their connection UI options; adapters are not implemented yet and are planned capabilities.
+
+## Installation
+
+Installers are published on the project's [Releases](https://github.com/lixinxins/QuillDB/releases) page:
+
+- macOS: Apple Silicon DMG, ZIP
+- Windows: x64 installer, x64 portable
+- Linux: x86_64 AppImage, amd64 DEB
+
+The HarmonyOS client build configuration is kept in `vite.harmony.config.ts` (outputs to `harmony-client/entry/...`); the client project is not distributed with this repository yet. Usage notes will be added once it is included.
+
+On macOS, an unsigned development build may require right-clicking the app in Finder and choosing "Open" the first time. For public distribution, signing and notarization with an Apple Developer ID is recommended.
+
+The current Windows build has no commercial code-signing certificate; SmartScreen may prompt on first run. Linux AppImage builds need execute permission granted after download.
+
+## Local Development
+
+### Requirements
+
+- Node.js 20 or later
+- Yarn 1.22.x
+
+### Start the project
+
+```bash
+git clone https://github.com/lixinxins/QuillDB.git
+cd QuillDB
+yarn install
+yarn dev
+```
+
+### Check and build
+
+```bash
+yarn typecheck
+yarn build
+```
+
+### Generate installers
+
+```bash
+yarn dist:mac
+yarn dist:win
+yarn dist:linux
+```
+
+Installers are written to `release/` by default. Build on the corresponding OS or CI runner to avoid native dependency, code-signing, and architecture differences.
+
+## Project Structure
+
+```text
+src/
+├── main/       # Electron main process, database adapters, local storage, and IPC
+├── preload/    # Secure renderer capability bridge
+├── renderer/   # React user interface
+└── shared/     # Types shared between main and renderer processes
+resources/      # App icon and packaging resources
+```
+
+## Data & Privacy
+
+- Connections, preferences, and saved queries are stored only on your machine.
+- If you choose to save a password, it is encrypted with the OS secure storage via Electron `safeStorage`.
+- SSH private keys and SSL certificates are stored only as local file paths; file contents are read by the Electron main process only when establishing a connection and are never passed to the page.
+- QuillDB does not provide cloud sync and never uploads database content.
+- Please do not expose real passwords, access tokens, or sensitive business data in issues, logs, or screenshots.
+
+## Contributing
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) first. When reporting a bug, include the OS, database type, reproduction steps, and any necessary sanitized logs.
+
+## Roadmap
+
+- Continue improving table structure design and object management across databases
+- Extend more database adapters and engine-specific capabilities
+- Improve execution plan visualization and performance analysis
+- Add automated tests and three-platform CI builds
+- Improve app signing, auto-update, and the formal release pipeline
+
+## License
+
+QuillDB is open-sourced under the [MIT License](LICENSE).
+
+## Author & Contact
+
+- Author: CodeAce
+- QQ: `941697962`
+- WeChat: scan the QR code below to add
+
+<p>
+  <img src="resources/codeace-wechat.jpg" width="300" alt="CodeAce WeChat QR code" />
+</p>
+
+---
+
+# QuillDB（中文版）
+
+<p align="center">面向开发者与数据库管理员的现代化、跨平台开源数据库工作台。</p>
+
+## 项目介绍
 
 QuillDB 基于 Electron、React 与 TypeScript 构建，面向 macOS、Windows 和 Linux。它将多数据库连接管理、对象浏览、SQL 编辑与执行、数据维护、导入导出、SSH/SFTP 和 AI 数据库助手整合在一个桌面工作台中，适合日常开发、数据排查与数据库运维。
 
-目前内置 14 种数据库引擎连接能力，覆盖 MySQL、MariaDB、PostgreSQL、SQLite、SQL Server、Oracle、TiDB、ClickHouse、MongoDB、Redis、DuckDB、Elasticsearch、达梦和人大金仓；仓库同时包含实验性的 HarmonyOS 客户端。
+目前内置 12 种数据库引擎连接能力，覆盖 MySQL、MariaDB、PostgreSQL、SQLite、SQL Server、TiDB、ClickHouse、MongoDB、Redis、DuckDB、达梦和人大金仓；Oracle 与 Elasticsearch 的连接选项已保留在界面中，适配器尚未实现，属规划中能力。仓库保留 HarmonyOS ArkWeb 构建配置，客户端工程暂未随仓库分发。
 
 > 当前稳定版本为 `1.0.1`。欢迎提交 Issue、功能建议和 Pull Request。
 
@@ -54,7 +226,7 @@ QuillDB 基于 Electron、React 与 TypeScript 构建，面向 macOS、Windows �
 
 ## 功能特性
 
-- 统一管理 14 种数据库引擎以及独立 SSH 连接
+- 统一管理 12 种数据库引擎以及独立 SSH 连接
 - 数据库与 SSH 连接分组、搜索、排序、导入导出及环境标记
 - SSH 隧道、交互式终端与 SFTP 文件管理，支持密码和私钥认证
 - SSL/TLS 安全连接，支持 CA 及客户端证书配置
@@ -71,7 +243,7 @@ QuillDB 基于 Electron、React 与 TypeScript 构建，面向 macOS、Windows �
 - 中文与英文界面
 - 浅色与经典主题、可调整宽度和折叠的数据库侧栏
 - macOS、Windows、Linux 安装包构建配置
-- HarmonyOS ArkWeb 客户端与数据库网关桥接层
+- HarmonyOS ArkWeb 构建配置（客户端工程暂未随仓库分发）
 
 ## 支持的数据库
 
@@ -79,11 +251,13 @@ QuillDB 基于 Electron、React 与 TypeScript 构建，面向 macOS、Windows �
 | --- | --- |
 | MySQL 生态 | MySQL、MariaDB、TiDB |
 | PostgreSQL 生态 | PostgreSQL、人大金仓 |
-| 商业关系型数据库 | SQL Server、Oracle、达梦 |
+| 商业关系型数据库 | SQL Server、达梦 |
 | 嵌入式分析数据库 | SQLite、DuckDB |
-| 分布式与 NoSQL | ClickHouse、MongoDB、Redis、Elasticsearch |
+| 分布式与 NoSQL | ClickHouse、MongoDB、Redis |
 
 不同数据库的对象类型、DDL、结果编辑和维护能力存在差异，界面会根据引擎能力动态展示可用操作。执行结构变更或写入操作前，请先备份重要数据。
+
+> Oracle 与 Elasticsearch 目前仅保留连接界面选项，适配器尚未实现，属规划中能力。
 
 ## 安装
 
@@ -93,7 +267,7 @@ QuillDB 基于 Electron、React 与 TypeScript 构建，面向 macOS、Windows �
 - Windows：x64 安装版、x64 便携版
 - Linux：x86_64 AppImage、amd64 DEB
 
-HarmonyOS 客户端目前作为独立工程提供，使用 DevEco Studio 构建，详情参见 [harmony-client/README.md](harmony-client/README.md)。
+HarmonyOS 客户端构建配置保留在 `vite.harmony.config.ts`（输出到 `harmony-client/entry/...`），客户端工程暂未随本仓库分发，待纳入后补充使用说明。
 
 macOS 未签名的开发构建首次打开时，可能需要在 Finder 中右键应用并选择“打开”。面向公众分发时建议使用 Apple Developer ID 完成签名与公证。
 

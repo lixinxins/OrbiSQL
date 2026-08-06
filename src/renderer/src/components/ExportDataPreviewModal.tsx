@@ -11,6 +11,7 @@ import {
   X
 } from '@phosphor-icons/react'
 import type { DatabaseConnection, DatabaseItem, TableColumnDefinition, TableItem } from '@/shared/connections'
+import { readTableDataCached } from '../utils/table-data-cache'
 
 interface ExportDataPreviewModalProps {
   connection: DatabaseConnection
@@ -45,7 +46,7 @@ export default function ExportDataPreviewModal({
       try {
         const [defRes, dataRes] = await Promise.all([
           window.omnidb.tables.getDefinition(connection.id, database.name, table.name),
-          window.omnidb.tables.readData(connection.id, database.name, table.name, 200, 0)
+          readTableDataCached(connection.id, database.name, table.name, 200, 0)
         ])
 
         if (!active) return

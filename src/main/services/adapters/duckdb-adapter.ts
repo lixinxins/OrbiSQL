@@ -18,6 +18,8 @@ import type {
   QueryUpdateRowInput,
   TableColumn,
   TableDataFilter,
+  TableDataFilterCondition,
+  TableDataFilterOperator,
   TableDefinitionResult,
   TableForeignKeyDefinition,
   TableIndexDefinition,
@@ -85,25 +87,28 @@ const normalizedColumnType = (dataType: string): MySQLColumnType => {
 }
 
 const filterDuckDb = (filter: TableDataFilter): string => {
-  const column = quoteDuckDb(filter.column)
-  const textValue = quoteLiteral(filter.value)
-  const textColumn = `CAST(${column} AS VARCHAR)`
-  const conditions: Record<TableDataFilter['operator'], string> = {
-    equals: `${column} = ${textValue}`,
-    notEquals: `${column} <> ${textValue}`,
-    contains: `${textColumn} LIKE ${quoteLiteral(`%${filter.value}%`)}`,
-    startsWith: `${textColumn} LIKE ${quoteLiteral(`${filter.value}%`)}`,
-    greaterThan: `${column} > ${textValue}`,
-    greaterThanOrEqual: `${column} >= ${textValue}`,
-    lessThan: `${column} < ${textValue}`,
-    lessThanOrEqual: `${column} <= ${textValue}`,
-    isEmpty: `${textColumn} = ''`,
-    isEmptyOrNull: `(${column} IS NULL OR ${textColumn} = '')`,
-    isNotEmpty: `(${column} IS NOT NULL AND ${textColumn} <> '')`,
-    isNull: `${column} IS NULL`,
-    isNotNull: `${column} IS NOT NULL`
+  const build = (cond: TableDataFilterCondition): string => {
+    const column = quoteDuckDb(cond.column)
+    const textValue = quoteLiteral(cond.value)
+    const textColumn = `CAST(${column} AS VARCHAR)`
+    const conditions: Record<TableDataFilterOperator, string> = {
+      equals: `${column} = ${textValue}`,
+      notEquals: `${column} <> ${textValue}`,
+      contains: `${textColumn} LIKE ${quoteLiteral(`%${cond.value}%`)}`,
+      startsWith: `${textColumn} LIKE ${quoteLiteral(`${cond.value}%`)}`,
+      greaterThan: `${column} > ${textValue}`,
+      greaterThanOrEqual: `${column} >= ${textValue}`,
+      lessThan: `${column} < ${textValue}`,
+      lessThanOrEqual: `${column} <= ${textValue}`,
+      isEmpty: `${textColumn} = ''`,
+      isEmptyOrNull: `(${column} IS NULL OR ${textColumn} = '')`,
+      isNotEmpty: `(${column} IS NOT NULL AND ${textColumn} <> '')`,
+      isNull: `${column} IS NULL`,
+      isNotNull: `${column} IS NOT NULL`
+    }
+    return conditions[cond.operator]
   }
-  return conditions[filter.operator]
+  return filter.filters.map(build).join(filter.logic === 'OR' ? ' OR ' : ' AND ')
 }
 
 // ── DuckDB handle cache ──────────────────────────────────────────────
@@ -319,16 +324,20 @@ export const readDuckDbTableData = async (
   offset: number,
   filter?: TableDataFilter
 ): Promise<QueryExecutionResult> => {
-  if (filter?.column) {
+  if (filter?.filters?.length) {
     const db = await ensureDuckDbHandle(connection)
     const cols = await dbAll<{ column_name: string }>(
       db,
       `SELECT column_name FROM duckdb_columns() WHERE schema_name = 'main' AND table_name = ?`,
       tableName
     )
-    if (!cols.some((c) => c.column_name === filter.column)) return { success: false, message: '筛选字段不存在' }
+    for (const cond of filter.filters) {
+      if (cond.column && !cols.some((c) => c.column_name === cond.column)) {
+        return { success: false, message: `筛选字段不存在：${cond.column}` }
+      }
+    }
   }
-  const where = filter?.column ? ` WHERE ${filterDuckDb(filter)}` : ''
+  const where = filter?.filters?.length ? ` WHERE ${filterDuckDb(filter)}` : ''
   const result = await executeDuckDbQuery(connection, `SELECT * FROM ${quoteDuckDb(tableName)}${where} LIMIT ${limit} OFFSET ${offset}`)
   return result.success && result.rows ? { ...result, message: `已加载 ${result.rows.length} 行数据` } : result
 }
